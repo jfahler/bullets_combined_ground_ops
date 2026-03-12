@@ -3,7 +3,7 @@ MZ-DIAG: MOOSE + Zone initialization diagnostics
 
 Usage (DCS Mission Editor):
 - TRIGGER: MISSION START -> ACTION: DO SCRIPT FILE (load Moose.lua first)
-- TRIGGER: TIME MORE (1)  -> ACTION: DO SCRIPT FILE (this file: DCS-CTLD-1.6.1/moose_zone_diag.lua)
+- TRIGGER: TIME MORE (1)  -> ACTION: DO SCRIPT FILE (this file: scripts/moose_zone_diag.lua)
 - Optional: TRIGGER: TIME MORE (3) -> DO SCRIPT / DO SCRIPT FILE for your mission logic that relies on MOOSE
 
 This script is safe to run even if MOOSE is not loaded yet. It will:

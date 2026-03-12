@@ -21,8 +21,8 @@ Mission Editor Setup (recommended):
 1) TRIGGER: MISSION START
    ACTION: DO SCRIPT FILE -> Moose.lua (load the MOOSE core library)
 
-2) TRIGGER: TIME MORE (1)
-   ACTION: DO SCRIPT FILE -> DCS-CTLD-1.6.1/moose_zone_init.lua (this file)
+  2) TRIGGER: TIME MORE (1)
+    ACTION: DO SCRIPT FILE -> scripts/moose_zone_init.lua (this file)
 
 Notes:
 - This script self-defers until MOOSE classes and Mission Editor zones are present.
@@ -192,30 +192,37 @@ local CONFIG = {
   --   "CTLD_VEH_STRYKER"= M1126 Stryker ICV
   --   "CTLD_VEH_BRADLEY"= M-2 Bradley
   --   "CTLD_ENGINEERS"   = 2-man engineer team (for building crates)
-  ctldTroops = {
-    { name = "Rifle Squad",   templates = {"CTLD_INF_BLUE"},   size = 8 },
-    { name = "AT Team",       templates = {"CTLD_INF_AT"},     size = 4 },
-    { name = "AA Team",       templates = {"CTLD_INF_AA"},     size = 2 },
-  },
+   ctldTroops = {
+     { name = "Rifle Squad",   templates = {"CTLD_INF_RIFLE"},   size = 8 },
+     { name = "AT Team",       templates = {"CTLD_INF_AT"},     size = 4 },
+     { name = "AA Team",       templates = {"CTLD_INF_AA"},     size = 2 },
+   },
   ctldVehicleCrates = {
     { name = "HMMWV TOW",     templates = {"CTLD_VEH_HUMVEE"},  crates = 2 },
     { name = "Stryker ICV",   templates = {"CTLD_VEH_STRYKER"}, crates = 2 },
     { name = "Bradley IFV",   templates = {"CTLD_VEH_BRADLEY"}, crates = 3 },
   },
-  ctldEngineers = {
-    name = "Engineers",
-    templates = {"CTLD_ENGINEERS"},
-    size = 2,
-  },
+   ctldEngineers = {
+     name = "Engineers",
+     templates = {"CTLD_ENGINEERS"},
+     size = 2,
+   },
+   ctldFarpCrates = {
+     { name = "FARP Crate",    templates = {"CTLD_FARP_CRATE"}, crates = 1 },
+   },
 
-  -- CTLD options (SMOKECOLOR/FLARECOLOR resolved at runtime, not at parse time)
-  ctldSmokeColor       = nil,    -- resolved in startCTLD(); nil = SMOKECOLOR.Blue
-  ctldFlareColor       = nil,    -- resolved in startCTLD(); nil = FLARECOLOR.White
-  ctldMoveToZone       = true,   -- Troops/vehicles move to nearest MOVE zone after drop
-  ctldMoveDistance      = 5000,   -- Max distance to search for MOVE zone (meters)
-  ctldEngineerSearch    = 2000,   -- Engineer search radius for crates (meters)
-  ctldRepairTime        = 300,    -- Seconds to repair a unit
-  ctldBuildTime         = 300,    -- Seconds to build from crates (0 = instant)
+   -- CTLD options (SMOKECOLOR/FLARECOLOR resolved at runtime, not at parse time)
+   ctldSmokeColor       = nil,    -- resolved in startCTLD(); nil = SMOKECOLOR.Blue
+   ctldFlareColor       = nil,    -- resolved in startCTLD(); nil = FLARECOLOR.White
+   ctldMoveToZone       = true,   -- Troops/vehicles move to nearest MOVE zone after drop
+   ctldMoveDistance      = 5000,   -- Max distance to search for MOVE zone (meters)
+   ctldEngineerSearch    = 2000,   -- Engineer search radius for crates (meters)
+   ctldRepairTime        = 300,    -- Seconds to repair a unit
+   ctldBuildTime         = 300,    -- Seconds to build from crates (0 = instant)
+   ctldUseSubcats        = true,   -- Enable subcategory menus for better organization
+   ctldHoverPickup       = true,   -- Allow pickup when hovering (Foothold feature)
+   ctldEnableSmokeDrop   = true,   -- Enable smoke marker drops
+   ctldEnableSmokeRelease= true,   -- Enable smoke release on pickup
 
   -- =====================
   -- MODDED HELICOPTER SUPPORT
@@ -283,27 +290,43 @@ local CONFIG = {
     neutral = { line = {0.7, 0.7, 0.7, 0.5}, fill = {0.7, 0.7, 0.7, 0.2}, text = {0.3, 0.3, 0.3, 1} },
   },
 
-  -- =====================
-  -- PERSISTENCE (save/load zone state across restarts)
-  -- =====================
-  enablePersistence  = false,     -- Set true to enable (requires lfs + io in DCS env)
-  saveInterval       = 60,        -- Auto-save every N seconds
-  saveFile           = "mz_state.lua",  -- Saved to lfs.writedir() .. "Missions/Saves/"
+   -- =====================
+   -- PERSISTENCE (save/load zone state across restarts)
+   -- =====================
+   enablePersistence  = false,     -- Set true to enable (requires lfs + io in DCS env)
+   saveInterval       = 60,        -- Auto-save every N seconds
+   saveFile           = "mz_state.lua",  -- Saved to lfs.writedir() .. "Missions/Saves/"
 
-  -- =====================
-  -- PLAYER CREDITS (Foothold-inspired economy)
-  -- =====================
-  enableCredits      = false,     -- Set true to enable credit system
-  rewards = {
-    infantry   = 5,
-    ground     = 10,
-    sam        = 30,
-    airplane   = 50,
-    helicopter = 50,
-    ship       = 200,
-    capture    = 200,
-  },
-  startingCredits    = 0,
+   -- =====================
+   -- SHOP PRICES (for credit system)
+   -- =====================
+   shopPrices = {
+     reinforcementWave = 500,    -- Additional AI spawn wave
+     smokeMarker       = 100,    -- Smoke marker for zone identification
+     ctldRifleSquad    = 150,    -- 8-man rifle squad
+     ctldATTeam        = 200,    -- 4-man AT team
+     ctldAATeam        = 180,    -- 2-man AA team
+     ctldHumvee        = 250,    -- HMMWV TOW
+     ctldStryker       = 300,    -- Stryker ICV
+     ctldBradley       = 350,    -- Bradley IFV
+     ctldEngineers     = 120,    -- 2-man engineer team
+     ctldFARPCrate     = 400,    -- FARP crate
+   },
+
+   -- =====================
+   -- PLAYER CREDITS (Foothold-inspired economy)
+   -- =====================
+   enableCredits      = false,     -- Set true to enable credit system
+   rewards = {
+     infantry   = 10,    -- Increased from 5 for better balance
+     ground     = 20,    -- Increased from 10 for better balance
+     sam        = 50,    -- Increased from 30 for better balance
+     airplane   = 75,    -- Increased from 50 for better balance
+     helicopter = 75,    -- Increased from 50 for better balance
+     ship       = 300,   -- Increased from 200 for better balance
+     capture    = 300,   -- Increased from 200 for better balance
+   },
+   startingCredits    = 0,
 }
 
 -- Test-mode overrides
@@ -2163,23 +2186,97 @@ local function startCTLD()
         logOnly("  Added engineer cargo: " .. eng.name .. " (size " .. tostring(eng.size or 2) .. ")")
       end
 
-      -- =====================
-      -- Add Vehicle Crates Cargo
-      -- =====================
-      for _, veh in ipairs(CONFIG.ctldVehicleCrates or {}) do
-        for _, tpl in ipairs(veh.templates or {}) do checkTemplate(tpl) end
-        if hasCTLD_CARGO then
-          my_ctld:AddCratesCargo(
-            veh.name,
-            veh.templates,
-            CTLD_CARGO.Enum.VEHICLE,
-            veh.crates or 2,
-            nil,
-            veh.stock or nil
-          )
-          logOnly("  Added crate cargo: " .. veh.name .. " (" .. tostring(veh.crates or 2) .. " crates)")
-        end
-      end
+       -- =====================
+       -- Add Vehicle Crates Cargo
+       -- =====================
+       for _, veh in ipairs(CONFIG.ctldVehicleCrates or {}) do
+         for _, tpl in ipairs(veh.templates or {}) do checkTemplate(tpl) end
+         if hasCTLD_CARGO then
+           my_ctld:AddCratesCargo(
+             veh.name,
+             veh.templates,
+             CTLD_CARGO.Enum.VEHICLE,
+             veh.crates or 2,
+             nil,
+             veh.stock or nil
+           )
+           logOnly("  Added crate cargo: " .. veh.name .. " (" .. tostring(veh.crates or 2) .. " crates)")
+         end
+       end
+       
+       -- =====================
+       -- Add FARP Crates Cargo
+       -- =====================
+       if CONFIG.ctldFarpCrates and hasCTLD_CARGO then
+         for _, farp in ipairs(CONFIG.ctldFarpCrates or {}) do
+           for _, tpl in ipairs(farp.templates or {}) do checkTemplate(tpl) end
+           my_ctld:AddCratesCargo(
+             farp.name,
+             farp.templates,
+             CTLD_CARGO.Enum.FARP,
+             farp.crates or 1,
+             nil,
+             farp.stock or nil
+           )
+           logOnly("  Added FARP cargo: " .. farp.name .. " (" .. tostring(farp.crates or 1) .. " crates)")
+         end
+       end
+       
+       -- =====================
+       -- Shop Menu Builder (for credit system)
+       -- =====================
+       if CONFIG.enableCredits then
+         -- Add shop items to CTLD menu
+         my_ctld:AddMenuItem("Reinforcement Wave", CONFIG.shopPrices.reinforcementWave, function()
+           -- Spawn reinforcement wave logic will go here
+           out("Reinforcement wave deployed! (Not yet implemented)", 10)
+         end)
+         
+         my_ctld:AddMenuItem("Smoke Marker", CONFIG.shopPrices.smokeMarker, function()
+           -- Smoke marker logic will go here
+           out("Smoke marker deployed! (Not yet implemented)", 10)
+         end)
+         
+          -- Add CTLD items to shop menu with prices
+          for _, troop in ipairs(CONFIG.ctldTroops or {}) do
+            local priceKey = "ctld" .. troop.name:gsub(" ", ""):gsub("Team", "Team"):gsub("Squad", "Squad")
+            if CONFIG.shopPrices[priceKey] then
+              my_ctld:AddMenuItem(troop.name .. " (" .. CONFIG.shopPrices[priceKey] .. " credits)", function()
+                -- This would normally trigger the CTLD cargo selection
+                out("Select " .. troop.name .. " from CTLD menu to purchase", 10)
+              end)
+            end
+          end
+         
+          for _, veh in ipairs(CONFIG.ctldVehicleCrates or {}) do
+            local priceKey = "ctld" .. veh.name:gsub(" ", ""):gsub("ICV", "ICV"):gsub("IFV", "IFV"):gsub("TOW", "TOW")
+            if CONFIG.shopPrices[priceKey] then
+              my_ctld:AddMenuItem(veh.name .. " (" .. CONFIG.shopPrices[priceKey] .. " credits)", function()
+                out("Select " .. veh.name .. " from CTLD menu to purchase", 10)
+              end)
+            end
+          end
+         
+          if CONFIG.ctldEngineers then
+            local priceKey = "ctldEngineers"
+            if CONFIG.shopPrices[priceKey] then
+              my_ctld:AddMenuItem("Engineer Team (" .. CONFIG.shopPrices[priceKey] .. " credits)", function()
+                out("Select Engineer Team from CTLD menu to purchase", 10)
+              end)
+            end
+          end
+         
+          if CONFIG.ctldFarpCrates then
+            for _, farp in ipairs(CONFIG.ctldFarpCrates or {}) do
+              local priceKey = "ctldFARPCrate"
+              if CONFIG.shopPrices[priceKey] then
+                my_ctld:AddMenuItem(farp.name .. " (" .. CONFIG.shopPrices[priceKey] .. " credits)", function()
+                  out("Select " .. farp.name .. " from CTLD menu to purchase", 10)
+                end)
+              end
+            end
+          end
+       end
 
       -- =====================
       -- Add CTLD Zones (only if the trigger zone exists in the ME)

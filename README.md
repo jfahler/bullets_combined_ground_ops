@@ -79,8 +79,8 @@ This script provides a comprehensive system for creating dynamic ground warfare 
 1. **MISSION START Trigger**
    - Action: DO SCRIPT FILE -> `Moose.lua` (load MOOSE core)
 
-2. **TIME MORE Trigger** (1 second delay)
-   - Action: DO SCRIPT FILE -> `DCS-CTLD-1.6.1/moose_zone_init.lua` (this file)
+  2. **TIME MORE Trigger** (1 second delay)
+    - Action: DO SCRIPT FILE -> `scripts/moose_zone_init.lua` (this file)
 
 ## Configuration Options
 
