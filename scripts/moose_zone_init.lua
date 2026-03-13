@@ -1232,7 +1232,7 @@ local function spawnInfantryPackage(atPoint, routePoints)
     local gVeh = mkGroup(string.format("BLUE_STRYKER_%d", t), "vehicle", vehUnits, routePoints)
     addGroupSafe(countryBlue, gVeh)
   else
-    msgAll("BLUE APC quota reached -- Stryker escort skipped", 8)
+    logOnly("BLUE APC quota reached -- Stryker escort skipped")
   end
 end
 
@@ -1477,7 +1477,7 @@ local function startSpawnManager(mooseZones)
     -- QUOTA GATE: skip entire wave if no room for any vehicle type
     local hasRoom = blueHasQuotaRoom()
     if not hasRoom then
-      msgAll("BLUE spawn skipped -- all vehicle quotas full", 8)
+      logOnly("BLUE spawn skipped -- all vehicle quotas full")
       -- Still update timestamp so we don't spam this message every tick
       lastBlueSpawnAt = curTime
       return
@@ -1514,7 +1514,7 @@ local function startSpawnManager(mooseZones)
       kind = "Infantry+Armor"
     end
     lastBlueSpawnAt = curTime
-    msgAll(string.format("BLUE %s wave -> %s (from %s)", kind or "?", target, tostring(zname or "?")), 10)
+    logOnly(string.format("BLUE %s wave -> %s (from %s)", kind or "?", target, tostring(zname or "?")))
   end
 
   -- =====================
@@ -1560,7 +1560,7 @@ local function startSpawnManager(mooseZones)
     -- QUOTA GATE: skip entire wave if no room for any vehicle type
     local hasRoom = redHasQuotaRoom()
     if not hasRoom then
-      msgAll("RED spawn skipped -- all vehicle quotas full", 8)
+      logOnly("RED spawn skipped -- all vehicle quotas full")
       RED.lastSpawnAt = curTime
       return
     end
@@ -1591,7 +1591,7 @@ local function startSpawnManager(mooseZones)
     end
     RED.toggle = not RED.toggle
     RED.lastSpawnAt = curTime
-    msgAll(string.format("RED wave -> %s (%s)", target, RED.active == "start" and "rear" or "mid"), 10)
+    logOnly(string.format("RED wave -> %s (%s)", target, RED.active == "start" and "rear" or "mid"))
   end
 
   -- =====================
