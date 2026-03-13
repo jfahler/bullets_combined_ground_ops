@@ -272,7 +272,7 @@ local CONFIG = {
   initialZoneSides = {
     Alpha   = 1,  -- RED starts with Alpha
     Bravo   = 1,
-    Charlie = 0,  -- Neutral
+    Charlie = 1,  -- Neutral
     Delta   = 1,
     Echo    = 1,
   },
@@ -302,14 +302,14 @@ local CONFIG = {
    -- =====================
    shopPrices = {
      reinforcementWave = 500,    -- Additional AI spawn wave
-     smokeMarker       = 100,    -- Smoke marker for zone identification
-     ctldRifleSquad    = 150,    -- 8-man rifle squad
-     ctldATTeam        = 200,    -- 4-man AT team
-     ctldAATeam        = 180,    -- 2-man AA team
+     smokeMarker       = 10,    -- Smoke marker for zone identification
+     ctldRifleSquad    = 0,    -- 8-man rifle squad
+     ctldATTeam        = 0,    -- 4-man AT team
+     ctldAATeam        = 0,    -- 2-man AA team
      ctldHumvee        = 250,    -- HMMWV TOW
      ctldStryker       = 300,    -- Stryker ICV
      ctldBradley       = 350,    -- Bradley IFV
-     ctldEngineers     = 120,    -- 2-man engineer team
+     ctldEngineers     = 10,    -- 2-man engineer team
      ctldFARPCrate     = 400,    -- FARP crate
    },
 
@@ -318,7 +318,7 @@ local CONFIG = {
    -- =====================
    enableCredits      = false,     -- Set true to enable credit system
    rewards = {
-     infantry   = 10,    -- Increased from 5 for better balance
+     infantry   = 0,    -- Increased from 5 for better balance
      ground     = 20,    -- Increased from 10 for better balance
      sam        = 50,    -- Increased from 30 for better balance
      airplane   = 75,    -- Increased from 50 for better balance
