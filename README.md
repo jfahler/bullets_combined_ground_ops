@@ -157,6 +157,9 @@ All configuration is done in the `CONFIG` table at the top of `scripts/bullets_g
 - `ctldTroops`/`ctldVehicleCrates`/`ctldEngineers`/`ctldFarpCrates`: Cargo definitions
 - `ctldExtraUnitCaps`: Capabilities for modded helicopters
 - `ctldUseOwnPilotSet`: Bypass category filter for modded helos (recommended: `true`)
+- `ctldPatchLogging`: Patch ciribob CTLD's `ctld.p()` at runtime to prevent circular-reference crashes (default: `true`)
+- `ctldMaxLogDepth`: Max table nesting depth for `ctld.p()` serialization (default: `10`)
+- `ctldSuppressInfoLogs`: Suppress `ctld.logInfo()` messages to reduce log volume; errors/warnings always kept (default: `false`)
 
 ### Advanced Features
 - `enablePersistence`: Save/load state across restarts (requires `lfs` + `io` in DCS env)

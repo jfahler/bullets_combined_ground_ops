@@ -262,6 +262,17 @@ local CONFIG = {
   },
 
   -- =====================
+  -- CTLD LOGGING CONTROL (ciribob CTLD only)
+  -- =====================
+  -- When using ciribob standalone CTLD, the ctld.p() function can crash on
+  -- deeply nested or circular-reference objects (MOOSE/DCS unit tables).
+  -- These options let the ground ops script monkey-patch CTLD at runtime
+  -- so you can use an UNMODIFIED ciribob CTLD.lua.
+  ctldPatchLogging     = true,   -- Patch ctld.p() to handle circular refs safely
+  ctldMaxLogDepth      = 10,     -- Max table nesting depth for ctld.p() serialization
+  ctldSuppressInfoLogs = false,  -- Suppress ctld.logInfo() messages (errors/warnings kept)
+
+  -- =====================
   -- ZONE_CAPTURE_COALITION SETTINGS
   -- =====================
   -- Use MOOSE ZONE_CAPTURE_COALITION for capture detection (replaces manual polling).
@@ -1976,6 +1987,67 @@ local function startSpawnManager(mooseZones)
 end
 
 -- =====================
+-- CIRIBOB CTLD LOGGING PATCH
+-- =====================
+-- Monkey-patches ciribob CTLD's ctld.p() and logging functions at runtime
+-- so users can run an UNMODIFIED ciribob CTLD.lua without log spam or crashes.
+-- The original ctld.p() recursively serializes tables but does NOT detect
+-- circular references (common in MOOSE/DCS objects), causing:
+--   "E - CTLD - p|2307: max depth reached in ctld.p : 20"
+-- Our replacement uses a 'seen' set to detect circular refs and returns
+-- "[circular]" instead of recursing into already-visited tables.
+local function patchCiribobCTLD()
+  if not CONFIG.ctldPatchLogging then return end
+  if type(ctld) ~= "table" then return end
+
+  local maxDepth = CONFIG.ctldMaxLogDepth or 10
+
+  -- Replace ctld.p() with a circular-reference-safe version
+  ctld.p = function(o, level, seen)
+    level = level or 0
+    seen  = seen or {}
+
+    if level > maxDepth then
+      return "[max depth]"
+    end
+
+    if type(o) == "table" then
+      if seen[o] then
+        return "[circular]"
+      end
+      seen[o] = true
+      local parts = {}
+      local indent = string.rep(" ", level + 1)
+      for key, value in pairs(o) do
+        parts[#parts + 1] = indent .. "." .. tostring(key) .. "=" .. ctld.p(value, level + 1, seen)
+      end
+      return "\n" .. table.concat(parts, "\n")
+    elseif type(o) == "function" then
+      return "[function]"
+    elseif type(o) == "boolean" then
+      return o and "[true]" or "[false]"
+    elseif o == nil then
+      return "[nil]"
+    else
+      return tostring(o)
+    end
+  end
+
+  -- Force debug/trace logging off as a safety measure
+  ctld.Debug = false
+  ctld.Trace = false
+
+  -- Optionally suppress ctld.logInfo() to reduce log volume
+  -- (errors and warnings are always kept)
+  if CONFIG.ctldSuppressInfoLogs then
+    ctld.logInfo = function() end
+  end
+
+  logOnly("Patched ciribob CTLD logging (maxDepth=" .. tostring(maxDepth)
+    .. ", suppressInfo=" .. tostring(CONFIG.ctldSuppressInfoLogs == true) .. ")")
+end
+
+-- =====================
 -- MOOSE Ops.CTLD SETUP
 -- =====================
 local function startCTLD()
@@ -2385,6 +2457,9 @@ local function startCTLD()
   -- =====================
   if hasCiribobCTLD then
     out("Detected ciribob CTLD v" .. tostring(ctld.Version) .. " -- configuring zones", 8)
+
+    -- Patch ciribob CTLD logging to prevent ctld.p() circular-reference crashes
+    patchCiribobCTLD()
 
     local ok2, err2 = pcall(function()
       -- The helicopter names "helicargo1".."helicargo25" are already in
