@@ -1256,7 +1256,7 @@ local function spawnArmorPackage(atPoint, routePoints)
 
   -- Support vehicles (not quota-limited: pass nil for quotaCat)
   spawnVehicleGroup("BLUE_CHAPARRAL", "M48 Chaparral", 1, cx, cy, 22, 1, nil, room, countryBlue, routePoints)
-  spawnVehicleGroup("BLUE_TOW",       "HMMWV TOW",     2, cx, cy, 20, 2, nil, room, countryBlue, routePoints)
+  spawnVehicleGroup("BLUE_TOW",       "M1045 HMMWV TOW", 2, cx, cy, 20, 2, nil, room, countryBlue, routePoints)
 
   -- German Gepard (BLUE coalition country) for AA
   spawnVehicleGroup("BLUE_GEPARD", "Gepard", 1, cx, cy, 28, 1, nil, room, country.id.GERMANY, routePoints)
