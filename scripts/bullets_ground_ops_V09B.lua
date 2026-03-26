@@ -89,6 +89,20 @@ local CONFIG = {
     APC  = 4,   -- BTR-80
   },
 
+  -- GARRISON TRADE: on zone capture, trade lowest-health attackers for fresh defenders
+  -- The capturing side's most damaged units are destroyed and replaced with full-health
+  -- units that spawn inside the captured zone and hold position as a garrison.
+  enableGarrisonTrade  = true,
+  garrisonHealthPct    = 0.5,    -- Only trade units below this health % (0.0-1.0)
+  garrisonMaxTrades    = 4,      -- Max units to trade per capture event
+  garrisonSpreadRadius = 50,     -- Spread radius (meters) for spawned garrison units
+  garrisonMatchType    = true,   -- true = replace with same unit type; false = use garrisonDefenseTypes
+  -- Fallback defense types if garrisonMatchType is false (keyed by side)
+  garrisonDefenseTypes = {
+    blue = { "M-2 Bradley" },
+    red  = { "BMP-2" },
+  },
+
   -- SEQUENTIAL ZONE ATTACK
   -- Groups attack the first uncaptured zone; when captured they advance to the next
   blueAdvanceRoute = { "Alpha", "Bravo", "Charlie", "Delta", "Echo" },
@@ -144,11 +158,12 @@ local CONFIG = {
   redC2CheckInterval = 15,          -- How often (seconds) to check C2 status
 
   -- =====================
-  -- MOOSE Ops.CTLD INTEGRATION
+  -- MOOSE Ops.CTLD INTEGRATION (MOOSE required)
   -- =====================
   -- Set to true to enable MOOSE CTLD (helicopter troop/cargo transport).
   -- Requires: MOOSE with Ops.CTLD module loaded, late-activated template groups
   -- in the ME, and CTLD zones (LOAD/DROP/MOVE) as trigger zones.
+  -- NOTE: ciribob standalone CTLD is no longer supported.
   enableCTLD = true,
 
   -- Transport GROUP name prefixes: any group whose name starts with one of
@@ -262,21 +277,79 @@ local CONFIG = {
   },
 
   -- =====================
-  -- CTLD LOGGING CONTROL (ciribob CTLD only)
+  -- CTLD LOGGING CONTROL (legacy — ciribob CTLD only)
   -- =====================
-  -- When using ciribob standalone CTLD, the ctld.p() function can crash on
-  -- deeply nested or circular-reference objects (MOOSE/DCS unit tables).
-  -- These options let the ground ops script monkey-patch CTLD at runtime
-  -- so you can use an UNMODIFIED ciribob CTLD.lua.
+  -- These options patch ciribob CTLD's logging if it happens to be loaded
+  -- alongside MOOSE. They have no effect when using MOOSE Ops.CTLD alone.
   ctldPatchLogging     = true,   -- Patch ctld.p() to handle circular refs safely
   ctldMaxLogDepth      = 10,     -- Max table nesting depth for ctld.p() serialization
   ctldSuppressInfoLogs = false,  -- Suppress ctld.logInfo() messages (errors/warnings kept)
 
   -- =====================
+  -- MOOSE Ops.CSAR (Combat Search and Rescue)
+  -- =====================
+  -- Uses MOOSE's CSAR module (Ops.CSAR) to handle pilot ejection events,
+  -- spawn downed-pilot beacons, and give helicopter pilots an F10 menu
+  -- to locate, pick up, and deliver rescued pilots to a MASH or airbase.
+  -- Requires: MOOSE with Ops.CSAR module loaded, a late-activated single
+  -- infantry unit template in the ME (e.g. "Downed Pilot"), and a beacon
+  -- sound file loaded into the mission (e.g. "beacon.ogg").
+  enableCSAR           = true,
+
+  -- Template name: late-activated single infantry unit in the ME.
+  -- MOOSE CSAR will clone this unit to represent ejected pilots.
+  csarTemplate         = "Downed Pilot",
+
+  -- Alias shown in logs / messages
+  csarAlias            = "Blue CSAR",
+
+  -- GROUP name prefixes whose pilots get the CSAR F10 menu.
+  -- Typically the same SAR/transport helos used for CTLD.
+  csarHeloPrefixes     = {
+    "JOLLY",      -- UH-60 transport / SAR
+    "PEDRO",      -- UH-60 CSAR / MEDEVAC
+    "FORD",       -- CH-47 heavy lift
+    "FATCOW",     -- CH-47 heavy lift (alternate callsign)
+    "helicargo",  -- fallback / legacy naming
+    "Helicargo",  -- fallback / legacy naming
+    "MEDEVAC",    -- dedicated MEDEVAC callsign
+  },
+
+  -- Use a custom SET_GROUP for CSAR pilots (bypasses category filter).
+  -- Recommended true for modded helicopters, same as ctldUseOwnPilotSet.
+  csarUseOwnPilotSet   = true,
+
+  -- CSAR behavior options
+  csarAllowFARPRescue  = true,    -- Allow rescue by landing at any FARP or airbase
+  csarAllowDownedPilotCA = false, -- Allow Combined Arms control of downed pilot
+  csarEnableForAI      = true,    -- Generate downed pilots for AI aircraft ejections too
+  csarOnCrash          = false,   -- Generate downed pilot on crash (not just ejection)
+  csarUsePara          = false,   -- Use LandingAfterEjection event instead of Ejection
+  csarPilotRunToHelo   = true,    -- Downed pilot runs toward rescue helo
+  csarLoadDistance      = 75,     -- Distance (meters) for pilot to board helicopter
+  csarExtractDistance   = 500,    -- Distance (meters) downed pilot will run to helo
+  csarMaxPilots         = 6,      -- Max downed pilots a single helo can carry
+  csarAutoSmoke         = true,   -- Auto-pop smoke when SAR helo is within 5 km
+  csarSmokeColor        = nil,    -- Resolved at runtime; nil = SMOKECOLOR.Green
+  csarCoordType         = 2,      -- 0=LL DDM, 1=LL DMS, 2=MGRS, 3=Bullseye imp, 4=Bullseye met
+  csarLimiterOn         = true,   -- Limit total downed pilots on the map
+  csarMaxDownedPilots   = 25,     -- Max simultaneous downed pilots (if limiter on)
+
+  -- MASH prefixes: name prefixes for GROUP, ZONE, or STATIC objects that act as
+  -- safe delivery points for rescued pilots.  MOOSE CSAR will automatically find
+  -- any object whose name starts with one of these prefixes.
+  -- If empty, CSAR will only allow delivery to FARPs and airbases
+  -- (requires csarAllowFARPRescue = true).
+  csarMashPrefixes     = { "MASH" },  -- e.g. { "MASH", "Hospital" }
+
+  -- Credit reward for successful CSAR rescue (requires enableCredits = true)
+  csarRescueReward     = 100,
+
+  -- =====================
   -- ZONE_CAPTURE_COALITION SETTINGS
   -- =====================
   -- Use MOOSE ZONE_CAPTURE_COALITION for capture detection (replaces manual polling).
-  -- This provides FSM events: OnAfterCaptured, OnAfterAttacked, OnAfterGuarded, OnAfterEmpty.
+  -- This provides FSM events: OnAfterCapture, OnAfterAttack, OnAfterGuard, OnAfterEmpty.
   useCaptureCoalition  = true,
   captureCheckInterval = 15,     -- How often (seconds) to check zone ownership
   -- Initial zone ownership: 1 = RED, 2 = BLUE, 0 = NEUTRAL
@@ -338,6 +411,14 @@ local CONFIG = {
      capture    = 300,   -- Increased from 200 for better balance
    },
    startingCredits    = 0,
+
+   -- =====================
+   -- ZONE DISPLAY NAMES (drawing label auto-detection)
+   -- =====================
+   -- Max distance (meters) to match a Mission Editor drawing label to a zone center.
+   -- TextBox objects from env.mission.drawings within this radius of a zone center
+   -- will be used as human-friendly display names in player-facing messages.
+   labelMatchRadius   = 500,
 }
 
 -- Test-mode overrides
@@ -549,6 +630,119 @@ local function msgAll(text, dur)
 end
 
 -- =====================
+-- ZONE DISPLAY NAMES (drawing label auto-detection)
+-- =====================
+-- Parses Mission Editor drawing-layer TextBox labels and matches them to
+-- capture zones by proximity.  Player-facing messages use the matched label
+-- as a human-friendly display name; log messages keep the technical zone name.
+
+--- Parse env.mission.drawings.layers and return a list of {text, x, z} for
+--- every TextBox object found.  Wrapped in pcall so missions without drawings
+--- (or older DCS versions) degrade gracefully.
+-- @return table  array of {text=string, x=number, z=number}
+local function getDrawingLabels()
+  local labels = {}
+  local ok, err = pcall(function()
+    if not env or not env.mission or not env.mission.drawings then return end
+    local layers = env.mission.drawings.layers
+    if not layers then return end
+    for _, layer in pairs(layers) do
+      local objects = layer.objects
+      if objects then
+        for _, obj in pairs(objects) do
+          if obj.primitiveType == "TextBox" and obj.text and obj.mapX and obj.mapY then
+            table.insert(labels, {
+              text = obj.text,
+              x    = obj.mapX,   -- world X (north-south)
+              z    = obj.mapY,   -- world Z (east-west) — DCS drawings use mapY for Z
+            })
+          end
+        end
+      end
+    end
+  end)
+  if not ok then
+    logOnly("getDrawingLabels() error: " .. tostring(err))
+  end
+  return labels
+end
+
+--- Find the nearest drawing label within maxDist meters of a given point.
+-- @param labels   table   array from getDrawingLabels()
+-- @param x        number  world X coordinate
+-- @param z        number  world Z coordinate
+-- @param maxDist  number  maximum match distance in meters (default 500)
+-- @return table|nil  the nearest label entry, or nil if none within range
+local function findNearestLabel(labels, x, z, maxDist)
+  maxDist = maxDist or 500
+  local bestDist = maxDist * maxDist  -- compare squared distances
+  local bestLabel = nil
+  for _, lbl in ipairs(labels) do
+    local dx = lbl.x - x
+    local dz = lbl.z - z
+    local d2 = dx * dx + dz * dz
+    if d2 < bestDist then
+      bestDist = d2
+      bestLabel = lbl
+    end
+  end
+  return bestLabel
+end
+
+--- Build a lookup table mapping technical zone names to human-friendly display
+--- names derived from nearby Mission Editor drawing labels.
+-- @param zoneNames  table  list of zone name strings
+-- @return table  {[zoneName] = displayText}
+local function buildZoneDisplayNames(zoneNames)
+  local map = {}
+  local labels = getDrawingLabels()
+  local maxDist = CONFIG.labelMatchRadius or 500
+
+  for _, zn in ipairs(zoneNames) do
+    local p = nil
+    -- Try trigger.misc.getZone first (always available at init time)
+    if trigger and trigger.misc and trigger.misc.getZone then
+      local z = trigger.misc.getZone(zn)
+      if z and z.point then p = z.point end
+    end
+    -- Fallback to MOOSE ZONE
+    if not p and getGlobal("ZONE") then
+      local ok2, zo = pcall(function() return ZONE:New(zn) end)
+      if ok2 and zo and zo.GetCoordinate then
+        local c = zo:GetCoordinate()
+        p = { x = c.x, y = 0, z = c.z }
+      end
+    end
+
+    if p and #labels > 0 then
+      local nearest = findNearestLabel(labels, p.x, p.z, maxDist)
+      if nearest then
+        map[zn] = nearest.text
+        logOnly(string.format("Zone display name: %s -> \"%s\"", zn, nearest.text))
+      else
+        map[zn] = zn
+        logOnly(string.format("Zone display name: %s -> \"%s\" (no label found)", zn, zn))
+      end
+    else
+      map[zn] = zn
+      logOnly(string.format("Zone display name: %s -> \"%s\" (no label found)", zn, zn))
+    end
+  end
+  return map
+end
+
+--- Global lookup table: populated once during initialization.
+local zoneDisplayNames = {}
+
+--- Return the human-friendly display name for a zone, falling back to the
+--- technical zone name if no mapping exists.
+-- @param zoneName  string  technical zone name
+-- @return string  display name
+local function getZoneDisplayName(zoneName)
+  return zoneDisplayNames[zoneName] or zoneName
+end
+
+-- =====================
 -- DCS MARKUP ZONE DRAWING (Foothold-style)
 -- =====================
 -- Uses DCS trigger.action markup API for zone circles and labels.
@@ -594,9 +788,9 @@ local function drawZoneMarkup(zoneName, zoneIdx, side)
     trigger.action.circleToAll(-1, circleId, z.point, radius, cs.line, cs.fill, 2)
   end)
 
-  -- Label above the zone
+  -- Label above the zone (use display name for player-facing map label)
   local labelPoint = { x = z.point.x, y = z.point.y, z = z.point.z + radius + 200 }
-  local labelText = zoneName .. " [" .. sideName(side) .. "]"
+  local labelText = getZoneDisplayName(zoneName) .. " [" .. sideName(side) .. "]"
   local bgColor = {0.1, 0.1, 0.1, 0.6}
   pcall(function()
     trigger.action.textToAll(-1, labelId, labelPoint, cs.text, bgColor, 16, true, labelText)
@@ -628,7 +822,7 @@ local function updateZoneMarkup(zoneIdx, newSide, zoneName)
       trigger.action.setMarkupColor(circleId, cs.line)
     end)
 
-    local labelText = zoneName .. " [" .. sideName(newSide) .. "]"
+    local labelText = getZoneDisplayName(zoneName) .. " [" .. sideName(newSide) .. "]"
     pcall(function()
       trigger.action.setMarkupColor(labelId, cs.text)
       trigger.action.setMarkupText(labelId, labelText)
@@ -853,7 +1047,7 @@ local function buildZones(names)
       if not CONFIG.useMarkupDraw then
         safeDrawZone(zo)
       end
-      msgAll("Zone " .. (zo.GetName and zo:GetName() or n) .. " initialized", 8)
+      msgAll("Zone " .. getZoneDisplayName(zo.GetName and zo:GetName() or n) .. " initialized", 8)
     else
       out(string.format("MOOSE ZONE:New('%s') failed: %s", n, tostring(zoOrErr)), 10)
     end
@@ -1198,6 +1392,148 @@ local function redHasQuotaRoom()
       room.MBT, room.IFV, room.APC, totalRoom), 5)
   end
   return totalRoom > 0, alive, room
+end
+
+-- =====================
+-- GARRISON TRADE: swap lowest-health attackers for fresh defenders in captured zone
+-- =====================
+
+--- Collect all alive units for a coalition that belong to tracked quota types.
+-- Returns a flat list of { unit = DCS Unit, typeName = string, healthPct = number }.
+local function collectTrackedUnits(coalitionSide, typeClassMap)
+  local result = {}
+  local ok, groups = pcall(function()
+    return coalition.getGroups(coalitionSide, Group.Category.GROUND)
+  end)
+  if not ok or not groups then return result end
+  for _, grp in ipairs(groups) do
+    if grp and grp:isExist() then
+      local units = grp:getUnits()
+      if units then
+        for _, u in ipairs(units) do
+          if u and u:isExist() and u:getLife() > 1 then
+            local typeName = u:getTypeName()
+            if typeClassMap[typeName] then
+              local life  = u:getLife()
+              local life0 = u:getLife0()
+              local pct   = (life0 and life0 > 0) and (life / life0) or 1.0
+              table.insert(result, { unit = u, typeName = typeName, healthPct = pct })
+            end
+          end
+        end
+      end
+    end
+  end
+  return result
+end
+
+--- Trade the lowest-health units of the capturing side for fresh garrison defenders.
+-- Called immediately after a zone is captured.
+-- @param coalitionSide  number   coalition.side.BLUE or coalition.side.RED
+-- @param zoneName       string   name of the captured zone (e.g. "Alpha")
+local function tradeAndGarrison(coalitionSide, zoneName)
+  if not CONFIG.enableGarrisonTrade then return end
+
+  local isBlue     = (coalitionSide == coalition.side.BLUE)
+  local typeMap    = isBlue and BLUE_TYPE_CLASS or RED_TYPE_CLASS
+  local countryId  = isBlue
+                     and (CONFIG.useUSAForBlue and country.id.USA or country.id.CJTF_BLUE)
+                     or  country.id.CJTF_RED
+  local sideLabel  = isBlue and "BLUE" or "RED"
+
+  -- Get zone center for garrison placement
+  local zonePoint = getZonePoint(zoneName)
+  if not zonePoint then
+    out("[GarrisonTrade] Cannot find zone point for '" .. zoneName .. "'", 5)
+    return
+  end
+  local cx = zonePoint.x
+  local cy = zonePoint.z or zonePoint.y or 0
+
+  -- Collect all tracked units and filter to those below health threshold
+  local allUnits = collectTrackedUnits(coalitionSide, typeMap)
+  local candidates = {}
+  for _, info in ipairs(allUnits) do
+    if info.healthPct < (CONFIG.garrisonHealthPct or 0.5) then
+      table.insert(candidates, info)
+    end
+  end
+
+  if #candidates == 0 then
+    if CONFIG.testMode then
+      out(string.format("[GarrisonTrade] %s: no units below %.0f%% health — no trades",
+        sideLabel, (CONFIG.garrisonHealthPct or 0.5) * 100), 5)
+    end
+    return
+  end
+
+  -- Sort by health ascending (most damaged first)
+  table.sort(candidates, function(a, b) return a.healthPct < b.healthPct end)
+
+  -- Cap to max trades
+  local maxTrades = CONFIG.garrisonMaxTrades or 4
+  local tradeCount = math.min(#candidates, maxTrades)
+
+  -- Build list of units to trade (destroy old, spawn new)
+  local toTrade = {}
+  for i = 1, tradeCount do
+    table.insert(toTrade, candidates[i])
+  end
+
+  -- Destroy the old damaged units and record their types for replacement
+  local replaceTypes = {}
+  local destroyedCount = 0
+  for _, info in ipairs(toTrade) do
+    local uName = "unknown"
+    pcall(function() uName = info.unit:getName() end)
+    local pctStr = string.format("%.0f%%", info.healthPct * 100)
+    out(string.format("[GarrisonTrade] %s: destroying %s (%s, %s health) for garrison swap",
+      sideLabel, uName, info.typeName, pctStr), 5)
+
+    -- Determine replacement type
+    local replaceType = info.typeName  -- default: same type
+    if not CONFIG.garrisonMatchType then
+      local defTypes = CONFIG.garrisonDefenseTypes and CONFIG.garrisonDefenseTypes[isBlue and "blue" or "red"]
+      if defTypes and #defTypes > 0 then
+        replaceType = defTypes[((destroyedCount) % #defTypes) + 1]
+      end
+    end
+    table.insert(replaceTypes, replaceType)
+
+    -- Destroy the unit
+    pcall(function() info.unit:destroy() end)
+    destroyedCount = destroyedCount + 1
+  end
+
+  if destroyedCount == 0 then return end
+
+  -- Spawn fresh garrison units at the zone center with a hold waypoint
+  -- Each replacement is its own single-unit group so DCS AI doesn't merge routes
+  local t = math.floor(now())
+  local spreadRadius = CONFIG.garrisonSpreadRadius or 50
+  local pts = radialOffsets(cx, cy, math.max(destroyedCount, 4), spreadRadius)
+
+  -- Build a single hold waypoint at the zone center (units stay in place)
+  local holdWP = makeWaypoint(cx, cy, "Off Road", 0)
+
+  for i = 1, destroyedCount do
+    local typeName = replaceTypes[i]
+    local p = pts[((i - 1) % #pts) + 1]
+    local gName = string.format("GR_%s_%s_%d_%02d", sideLabel, zoneName, t, i)
+    local uName = string.format("GR_%s_%s_%d_%02dU", sideLabel, zoneName, t, i)
+
+    local unitData = mkUnit(uName, typeName, p.x, p.y, p.hdg)
+    local grpData  = mkGroup(gName, "vehicle", { unitData }, { holdWP })
+    local grp = addGroupSafe(countryId, grpData)
+
+    if grp and CONFIG.testMode then
+      out(string.format("[GarrisonTrade] Spawned %s garrison: %s (%s) in %s",
+        sideLabel, gName, typeName, zoneName), 5)
+    end
+  end
+
+  msgAll(string.format("%s garrison: %d damaged units traded for fresh defenders in %s",
+    sideLabel, destroyedCount, getZoneDisplayName(zoneName)), 10)
 end
 
 -- =====================
@@ -1642,7 +1978,7 @@ local function startSpawnManager(mooseZones)
   -- ZONE_CAPTURE_COALITION SETUP (replaces manual capture polling)
   -- =====================
   -- Uses MOOSE ZONE_CAPTURE_COALITION for automatic capture detection.
-  -- Each zone fires FSM events: OnAfterCaptured, OnAfterAttacked, OnAfterGuarded, OnAfterEmpty.
+  -- Each zone fires FSM events: OnAfterCapture, OnAfterAttack, OnAfterGuard, OnAfterEmpty.
   -- Falls back to the legacy SCHEDULER-based polling if ZONE_CAPTURE_COALITION is not available.
 
   local captureZones = {}  -- { [zoneName] = ZONE_CAPTURE_COALITION object }
@@ -1676,9 +2012,9 @@ local function startSpawnManager(mooseZones)
           drawZoneMarkup(zn, zIdx, initSide)
 
           -- =====================
-          -- OnAfterCaptured: fires when a new coalition takes the zone
+          -- OnAfterCapture: fires when a new coalition takes the zone
           -- =====================
-          function zcz:OnAfterCaptured(From, Event, To, NewCoalition)
+          function zcz:OnAfterCapture(From, Event, To, NewCoalition)
             local newSide = 0
             if NewCoalition == coalition.side.BLUE then newSide = 2
             elseif NewCoalition == coalition.side.RED then newSide = 1
@@ -1708,7 +2044,7 @@ local function startSpawnManager(mooseZones)
             else
               nextTarget = getCurrentTarget(CONFIG.redAdvanceRoute, redCaptured)
             end
-            msgAll(string.format("%s captured by %s! Next target: %s", zn, sName, nextTarget), 12)
+            msgAll(string.format("%s captured by %s! Next target: %s", getZoneDisplayName(zn), sName, getZoneDisplayName(nextTarget)), 12)
 
             -- Award capture credits (only to players actually in/near the zone)
             if CONFIG.enableCredits then
@@ -1734,6 +2070,13 @@ local function startSpawnManager(mooseZones)
                   end
                 end
               end
+            end
+
+            -- Garrison trade: swap damaged attackers for fresh defenders in this zone
+            if newSide == 2 then
+              tradeAndGarrison(coalition.side.BLUE, zn)
+            elseif newSide == 1 then
+              tradeAndGarrison(coalition.side.RED, zn)
             end
 
             -- BLUE capture actions
@@ -1767,18 +2110,18 @@ local function startSpawnManager(mooseZones)
           end
 
           -- =====================
-          -- OnAfterAttacked: fires when enemy units enter a held zone
+          -- OnAfterAttack: fires when enemy units enter a held zone
           -- =====================
-          function zcz:OnAfterAttacked(From, Event, To, AttackCoalition)
-            msgAll(string.format("%s is under attack by %s!", zn, sideName(AttackCoalition)), 8)
+          function zcz:OnAfterAttack(From, Event, To, AttackCoalition)
+            msgAll(string.format("%s is under attack by %s!", getZoneDisplayName(zn), sideName(AttackCoalition)), 8)
           end
 
           -- =====================
-          -- OnAfterGuarded: fires when only the owning coalition is in the zone
+          -- OnAfterGuard: fires when only the owning coalition is in the zone
           -- =====================
-          function zcz:OnAfterGuarded(From, Event, To)
+          function zcz:OnAfterGuard(From, Event, To)
             if CONFIG.testMode then
-              out(string.format("%s is guarded", zn), 3)
+              out(string.format("%s is guarded", getZoneDisplayName(zn)), 3)
             end
           end
 
@@ -1837,12 +2180,14 @@ local function startSpawnManager(mooseZones)
                   redCaptured[zn] = false  -- clear RED ownership on BLUE capture
                   holdStart[holdKey] = nil
                   local nextTarget = getCurrentTarget(CONFIG.blueAdvanceRoute, blueCaptured)
-                  msgAll(string.format("%s captured by BLUE! Next target: %s", zn, nextTarget), 12)
+                  msgAll(string.format("%s captured by BLUE! Next target: %s", getZoneDisplayName(zn), getZoneDisplayName(nextTarget)), 12)
                   -- Update DCS markup zone colors (primary visual)
                   local zIdx = legacyZoneIndexMap[zn]
                   if zIdx then updateZoneMarkup(zIdx, 2, zn) end
                   -- Also update MOOSE DrawZone as fallback
                   redrawZoneColor(zo, {0, 0, 1}, {0, 0, 1})
+                  -- Garrison trade: swap damaged attackers for fresh defenders
+                  tradeAndGarrison(coalition.side.BLUE, zn)
                   -- Advance BLUE hub (data-driven via CONFIG.blueHubAdvance)
                   local blueNewHub = CONFIG.blueHubAdvance and CONFIG.blueHubAdvance[zn]
                   if blueNewHub and activeHub ~= blueNewHub then
@@ -1878,12 +2223,14 @@ local function startSpawnManager(mooseZones)
                   blueCaptured[zn] = false  -- clear BLUE ownership on RED capture
                   holdStart[holdKey] = nil
                   local nextTarget = getCurrentTarget(CONFIG.redAdvanceRoute, redCaptured)
-                  msgAll(string.format("%s captured by RED! Next target: %s", zn, nextTarget), 12)
+                  msgAll(string.format("%s captured by RED! Next target: %s", getZoneDisplayName(zn), getZoneDisplayName(nextTarget)), 12)
                   -- Update DCS markup zone colors (primary visual)
                   local zIdx = legacyZoneIndexMap[zn]
                   if zIdx then updateZoneMarkup(zIdx, 1, zn) end
                   -- Also update MOOSE DrawZone as fallback
                   redrawZoneColor(zo, {1, 0, 0}, {1, 0, 0})
+                  -- Garrison trade: swap damaged attackers for fresh defenders
+                  tradeAndGarrison(coalition.side.RED, zn)
                   -- Advance RED hub (data-driven via CONFIG.redHubAdvance)
                   local redNewHub = CONFIG.redHubAdvance and CONFIG.redHubAdvance[zn]
                   if redNewHub and RED.active ~= redNewHub then
@@ -2048,7 +2395,7 @@ local function patchCiribobCTLD()
 end
 
 -- =====================
--- MOOSE Ops.CTLD SETUP
+-- MOOSE Ops.CTLD SETUP (MOOSE required — ciribob CTLD no longer supported)
 -- =====================
 local function startCTLD()
   if not CONFIG.enableCTLD then return end
@@ -2085,9 +2432,9 @@ local function startCTLD()
   end
 
   if not hasMooseCTLD and not hasCiribobCTLD then
-    out("CTLD disabled: neither MOOSE Ops.CTLD nor ciribob CTLD found.\n"
-      .. "  - For MOOSE: ensure your MOOSE build includes Ops.CTLD\n"
-      .. "  - For ciribob: load CTLD-i18n.lua, mist.lua, then CTLD.lua before this script", 15)
+    out("CTLD disabled: MOOSE Ops.CTLD not found.\n"
+      .. "  Ensure Moose.lua (with Ops.CTLD module) is loaded before this script.\n"
+      .. "  ciribob standalone CTLD is no longer supported.", 15)
     return
   end
 
@@ -2135,7 +2482,7 @@ local function startCTLD()
       my_ctld.SmokeColor            = CONFIG.ctldSmokeColor or smokeBlue
       my_ctld.FlareColor            = CONFIG.ctldFlareColor or flareWhite
       my_ctld.useprefix             = true
-      my_ctld.enableslingload       = false
+      my_ctld.enableslingload       = true    -- Required for CH-47 and other helos to pick up crates
       my_ctld.enableFixedWing       = true    -- enable C-130 / Hercules fixed-wing support
       my_ctld.pilotmustopendoors    = false
       my_ctld.forcehoverload        = true
@@ -2230,12 +2577,12 @@ local function startCTLD()
         for _, tpl in ipairs(troop.templates or {}) do checkTemplate(tpl) end
         if hasCTLD_CARGO then
           my_ctld:AddTroopsCargo(
-            troop.name,
-            troop.templates,
-            CTLD_CARGO.Enum.TROOPS,
-            troop.size,
-            nil,
-            nil
+            troop.name,           -- Name: display name in F10 menu
+            troop.templates,      -- Templates: late-activated group names from ME
+            CTLD_CARGO.Enum.TROOPS, -- Type: troop cargo type
+            troop.size,           -- NoUnits: number of infantry to spawn
+            nil,                  -- PerUnit: nil = default
+            nil                   -- Stock: nil = unlimited
           )
           logOnly("  Added troop cargo: " .. troop.name .. " (size " .. tostring(troop.size) .. ")")
         end
@@ -2248,12 +2595,12 @@ local function startCTLD()
         local eng = CONFIG.ctldEngineers
         for _, tpl in ipairs(eng.templates or {}) do checkTemplate(tpl) end
         my_ctld:AddTroopsCargo(
-          eng.name,
-          eng.templates,
-          CTLD_CARGO.Enum.ENGINEERS,
-          eng.size or 2,
-          nil,
-          nil
+          eng.name,              -- Name: display name in F10 menu
+          eng.templates,         -- Templates: late-activated group names from ME
+          CTLD_CARGO.Enum.ENGINEERS, -- Type: engineer cargo type
+          eng.size or 2,         -- NoUnits: number of engineers to spawn
+          nil,                   -- PerUnit: nil = default
+          nil                    -- Stock: nil = unlimited
         )
         logOnly("  Added engineer cargo: " .. eng.name .. " (size " .. tostring(eng.size or 2) .. ")")
       end
@@ -2265,12 +2612,12 @@ local function startCTLD()
          for _, tpl in ipairs(veh.templates or {}) do checkTemplate(tpl) end
          if hasCTLD_CARGO then
            my_ctld:AddCratesCargo(
-             veh.name,
-             veh.templates,
-             CTLD_CARGO.Enum.VEHICLE,
-             veh.crates or 2,
-             nil,
-             veh.stock or nil
+             veh.name,            -- Name: display name in F10 menu
+             veh.templates,       -- Templates: late-activated group names from ME
+             CTLD_CARGO.Enum.VEHICLE, -- Type: vehicle cargo type
+             veh.crates or 2,     -- NoCrates: number of crates needed to build
+             nil,                 -- PerCrate: nil = default
+             veh.stock or nil     -- Stock: nil = unlimited
            )
            logOnly("  Added crate cargo: " .. veh.name .. " (" .. tostring(veh.crates or 2) .. " crates)")
          end
@@ -2283,71 +2630,29 @@ local function startCTLD()
          for _, farp in ipairs(CONFIG.ctldFarpCrates or {}) do
            for _, tpl in ipairs(farp.templates or {}) do checkTemplate(tpl) end
            my_ctld:AddCratesCargo(
-             farp.name,
-             farp.templates,
-             CTLD_CARGO.Enum.FARP,
-             farp.crates or 1,
-             nil,
-             farp.stock or nil
+             farp.name,           -- Name: display name in F10 menu
+             farp.templates,      -- Templates: late-activated group names from ME
+             CTLD_CARGO.Enum.FARP, -- Type: FARP cargo type
+             farp.crates or 1,    -- NoCrates: number of crates needed to build
+             nil,                 -- PerCrate: nil = default
+             farp.stock or nil    -- Stock: nil = unlimited
            )
            logOnly("  Added FARP cargo: " .. farp.name .. " (" .. tostring(farp.crates or 1) .. " crates)")
          end
        end
        
        -- =====================
-       -- Shop Menu Builder (for credit system)
+       -- Shop Menu Builder (for credit system) — TODO
        -- =====================
+       -- NOTE: MOOSE Ops.CTLD does not have an AddMenuItem() method.
+       -- When enableCredits is implemented, use MOOSE MENU_COALITION_COMMAND
+       -- or MENU_GROUP_COMMAND to create F10 shop menus. Example:
+       --   local shopMenu = MENU_COALITION:New(coalition.side.BLUE, "CTLD Shop")
+       --   MENU_COALITION_COMMAND:New(coalition.side.BLUE, "Buy Rifle Squad (0 cr)", shopMenu, function()
+       --     -- deduct credits, then trigger cargo spawn
+       --   end)
        if CONFIG.enableCredits then
-         -- Add shop items to CTLD menu
-         my_ctld:AddMenuItem("Reinforcement Wave", CONFIG.shopPrices.reinforcementWave, function()
-           -- Spawn reinforcement wave logic will go here
-           out("Reinforcement wave deployed! (Not yet implemented)", 10)
-         end)
-         
-         my_ctld:AddMenuItem("Smoke Marker", CONFIG.shopPrices.smokeMarker, function()
-           -- Smoke marker logic will go here
-           out("Smoke marker deployed! (Not yet implemented)", 10)
-         end)
-         
-          -- Add CTLD items to shop menu with prices
-          for _, troop in ipairs(CONFIG.ctldTroops or {}) do
-            local priceKey = "ctld" .. troop.name:gsub(" ", ""):gsub("Team", "Team"):gsub("Squad", "Squad")
-            if CONFIG.shopPrices[priceKey] then
-              my_ctld:AddMenuItem(troop.name .. " (" .. CONFIG.shopPrices[priceKey] .. " credits)", function()
-                -- This would normally trigger the CTLD cargo selection
-                out("Select " .. troop.name .. " from CTLD menu to purchase", 10)
-              end)
-            end
-          end
-         
-          for _, veh in ipairs(CONFIG.ctldVehicleCrates or {}) do
-            local priceKey = "ctld" .. veh.name:gsub(" ", ""):gsub("ICV", "ICV"):gsub("IFV", "IFV"):gsub("TOW", "TOW")
-            if CONFIG.shopPrices[priceKey] then
-              my_ctld:AddMenuItem(veh.name .. " (" .. CONFIG.shopPrices[priceKey] .. " credits)", function()
-                out("Select " .. veh.name .. " from CTLD menu to purchase", 10)
-              end)
-            end
-          end
-         
-          if CONFIG.ctldEngineers then
-            local priceKey = "ctldEngineers"
-            if CONFIG.shopPrices[priceKey] then
-              my_ctld:AddMenuItem("Engineer Team (" .. CONFIG.shopPrices[priceKey] .. " credits)", function()
-                out("Select Engineer Team from CTLD menu to purchase", 10)
-              end)
-            end
-          end
-         
-          if CONFIG.ctldFarpCrates then
-            for _, farp in ipairs(CONFIG.ctldFarpCrates or {}) do
-              local priceKey = "ctldFARPCrate"
-              if CONFIG.shopPrices[priceKey] then
-                my_ctld:AddMenuItem(farp.name .. " (" .. CONFIG.shopPrices[priceKey] .. " credits)", function()
-                  out("Select " .. farp.name .. " from CTLD menu to purchase", 10)
-                end)
-              end
-            end
-          end
+         logOnly("Credit system enabled but CTLD shop menu not yet implemented (requires MENU_COALITION_COMMAND)")
        end
 
       -- =====================
@@ -2404,6 +2709,31 @@ local function startCTLD()
       my_ctld:__Start(5)
 
       -- =====================
+      -- Debug: log actual DCS type name when player enters aircraft
+      -- This helps verify that ctldExtraUnitCaps type strings match the mod
+      -- =====================
+      world.addEventHandler({
+        onEvent = function(self, event)
+          if event.id == world.event.S_EVENT_PLAYER_ENTER_UNIT and event.initiator then
+            local typeName = event.initiator:getTypeName()
+            local unitName = event.initiator:getName()
+            local groupName = event.initiator:getGroup() and event.initiator:getGroup():getName() or "?"
+            logOnly(string.format("[MZ-CTLD] Player entered unit '%s' (group '%s'), DCS type = '%s'",
+              unitName, groupName, typeName or "nil"))
+            -- Check if this type is registered in our capabilities
+            local found = false
+            for _, cap in ipairs(CONFIG.ctldExtraUnitCaps or {}) do
+              if cap.type == typeName then found = true; break end
+            end
+            if not found and typeName then
+              out(string.format("[MZ-CTLD] WARNING: Aircraft type '%s' is NOT registered in ctldExtraUnitCaps.\n"
+                .. "  Add it to CONFIG.ctldExtraUnitCaps for CTLD crate/troop support.", typeName), 12)
+            end
+          end
+        end
+      })
+
+      -- =====================
       -- FSM Event Callbacks
       -- =====================
       function my_ctld:OnAfterTroopsDeployed(From, Event, To, Group, Unit, Troops)
@@ -2453,75 +2783,436 @@ local function startCTLD()
   end
 
   -- =====================
-  -- PATH B: ciribob standalone CTLD (fallback)
+  -- PATH B: ciribob standalone CTLD — REMOVED
   -- =====================
-  if hasCiribobCTLD then
-    out("Detected ciribob CTLD v" .. tostring(ctld.Version) .. " -- configuring zones", 8)
+  -- ciribob standalone CTLD is no longer supported. This script requires
+  -- MOOSE Ops.CTLD. Ensure Moose.lua is loaded before this script in the ME.
+  if hasCiribobCTLD and not hasMooseCTLD then
+    out("WARNING: ciribob CTLD detected but MOOSE Ops.CTLD is required.\n"
+      .. "  ciribob CTLD is not supported by this script.\n"
+      .. "  Please load Moose.lua (with Ops.CTLD) before this script in the Mission Editor.", 20)
+  end
+end
 
-    -- Patch ciribob CTLD logging to prevent ctld.p() circular-reference crashes
-    patchCiribobCTLD()
+-- =====================
+-- MOOSE Ops.CSAR (Combat Search and Rescue)
+-- =====================
+-- Detects MOOSE CSAR class (Ops.CSAR), initializes and configures it
+-- for BLUE coalition pilot rescue operations.
 
-    local ok2, err2 = pcall(function()
-      -- The helicopter names "helicargo1".."helicargo25" are already in
-      -- ctld.transportPilotNames by default.  Add any extra names from CONFIG.
-      -- ciribob CTLD uses EXACT unit name matching, not prefix matching.
-      -- We'll add "helicargo1".."helicargo10" explicitly just in case the
-      -- defaults were overridden.
-      local function ensurePilotName(name)
-        for _, existing in ipairs(ctld.transportPilotNames) do
-          if existing == name then return end
-        end
-        table.insert(ctld.transportPilotNames, name)
-        out("  Added transport pilot: " .. name, 5)
-      end
+local function startCSAR()
+  if not CONFIG.enableCSAR then return end
 
-      -- Ensure helicargo1-4 are registered (they should be by default)
-      for i = 1, 4 do
-        ensurePilotName("helicargo" .. i)
-      end
-
-      -- Add LOAD zones (pickup zones) from CONFIG
-      -- ciribob format (post-init): { name, smokeColorNum, limit, activeFlag(1/0), side }
-      for _, zname in ipairs(CONFIG.ctldLoadZones or {}) do
-        if zoneExists(zname) then
-          table.insert(ctld.pickupZones, { zname, trigger.smokeColor.Blue, 10000, 1, 2 })
-          out("  Pickup zone added: " .. zname, 5)
-        else
-          out("WARNING: CTLD pickup zone '" .. zname .. "' not found in ME -- skipped", 10)
-        end
-      end
-
-      -- Add DROP zones from CONFIG
-      -- ciribob format (post-init): { name, smokeColorNum, side }
-      for _, zname in ipairs(CONFIG.ctldDropZones or {}) do
-        if zoneExists(zname) then
-          table.insert(ctld.dropOffZones, { zname, trigger.smokeColor.Green, 2, 1 })
-          out("  Drop-off zone added: " .. zname, 5)
-        else
-          out("WARNING: CTLD drop-off zone '" .. zname .. "' not found in ME -- skipped", 10)
-        end
-      end
-
-      -- Add MOVE zones (waypoint zones) from CONFIG
-      -- ciribob format (post-init): { name, smokeColorNum, activeFlag(1/0), side }
-      for _, zname in ipairs(CONFIG.ctldMoveZones or {}) do
-        if zoneExists(zname) then
-          table.insert(ctld.wpZones, { zname, trigger.smokeColor.Orange, 1, 2 })
-          out("  Waypoint zone added: " .. zname, 5)
-        else
-          out("WARNING: CTLD waypoint zone '" .. zname .. "' not found in ME -- skipped", 10)
-        end
-      end
-
-      out("ciribob CTLD configured successfully", 10)
-      msgAll("CTLD active (ciribob v" .. tostring(ctld.Version) .. ")! Use F10 menu to load troops.", 15)
-    end)
-
-    if not ok2 then
-      out("ciribob CTLD configuration failed: " .. tostring(err2), 15)
+  -- Detect MOOSE Ops.CSAR
+  local rawCSAR = rawget(_G, "CSAR")
+  local hasMooseCSAR = false
+  if rawCSAR ~= nil and type(rawCSAR) == "table" then
+    if type(rawCSAR.New) == "function" then
+      hasMooseCSAR = true
     end
+  end
+
+  logOnly(string.format("CSAR detection: MOOSE Ops.CSAR=%s", tostring(hasMooseCSAR)))
+
+  if not hasMooseCSAR then
+    out("CSAR disabled: MOOSE Ops.CSAR not found.\n"
+      .. "  Ensure Moose.lua (with Ops.CSAR module) is loaded before this script.\n"
+      .. "  You also need a late-activated infantry unit template named '"
+      .. (CONFIG.csarTemplate or "Downed Pilot") .. "' in the Mission Editor,\n"
+      .. "  and a 'beacon.ogg' sound file loaded into the mission.", 15)
     return
   end
+
+  logOnly("Initializing MOOSE Ops.CSAR...")
+
+  -- Resolve smoke color at runtime (MOOSE globals may not exist at parse time)
+  local smokeGreen = (getGlobal("SMOKECOLOR") and SMOKECOLOR.Green) or 0
+
+  local ok, err = pcall(function()
+    local templateName = CONFIG.csarTemplate or "Downed Pilot"
+    local alias        = CONFIG.csarAlias or "Blue CSAR"
+
+    -- Create the CSAR instance
+    local my_csar = CSAR:New(coalition.side.BLUE, templateName, alias)
+    _G.MZ_CSAR = my_csar  -- expose globally for debugging / external access
+
+    -- =====================
+    -- CSAR Options (mapped from CONFIG)
+    -- =====================
+    my_csar.allowFARPRescue            = (CONFIG.csarAllowFARPRescue ~= false)
+    my_csar.allowDownedPilotCAcontrol  = (CONFIG.csarAllowDownedPilotCA == true)
+    my_csar.enableForAI                = (CONFIG.csarEnableForAI ~= false)
+    my_csar.csarOncrash                = (CONFIG.csarOnCrash == true)
+    my_csar.csarUsePara                = (CONFIG.csarUsePara == true)
+    my_csar.pilotRuntoExtractPoint     = (CONFIG.csarPilotRunToHelo ~= false)
+    my_csar.loadDistance               = CONFIG.csarLoadDistance or 75
+    my_csar.extractDistance            = CONFIG.csarExtractDistance or 500
+    my_csar.max_units                  = CONFIG.csarMaxPilots or 6
+    my_csar.autosmoke                  = (CONFIG.csarAutoSmoke ~= false)
+    my_csar.smokecolor                 = CONFIG.csarSmokeColor or smokeGreen
+    my_csar.coordtype                  = CONFIG.csarCoordType or 2
+    my_csar.limitmaxdownedpilots       = (CONFIG.csarLimiterOn ~= false)
+    my_csar.maxdownedpilots            = CONFIG.csarMaxDownedPilots or 25
+    my_csar.useprefix                  = true
+    my_csar.csarPrefix                 = CONFIG.csarHeloPrefixes or { "helicargo", "MEDEVAC" }
+    my_csar.immortalcrew               = true
+    my_csar.invisiblecrew              = false
+    my_csar.enableSlotBlocking         = false   -- no slot blocking in MP coop
+
+    logOnly("CSAR template: " .. templateName)
+    logOnly("CSAR prefixes: " .. listToString(my_csar.csarPrefix))
+
+    -- =====================
+    -- Custom pilot SET_GROUP (bypass category filter for modded helos)
+    -- =====================
+    if CONFIG.csarUseOwnPilotSet then
+      local prefixes = CONFIG.csarHeloPrefixes or { "helicargo", "MEDEVAC" }
+      logOnly("CSAR: Using custom pilot SET_GROUP (no category filter)")
+      local pilotSet = SET_GROUP:New()
+        :FilterCoalitions("blue")
+        :FilterPrefixes(prefixes)
+        :FilterStart()
+      my_csar:SetOwnSetPilotGroups(pilotSet)
+      logOnly("  Custom CSAR pilot set created with prefixes: " .. listToString(prefixes))
+    end
+
+    -- =====================
+    -- MASH delivery points (prefix-based matching)
+    -- =====================
+    -- MOOSE CSAR uses mashprefix to find GROUP/ZONE/STATIC objects whose names
+    -- start with these prefixes.  Any matching object becomes a safe delivery point.
+    local mashPrefixes = CONFIG.csarMashPrefixes or { "MASH" }
+    my_csar.mashprefix = mashPrefixes
+    logOnly("  CSAR MASH prefixes: " .. listToString(mashPrefixes))
+    if #mashPrefixes == 0 then
+      logOnly("  No MASH prefixes configured — pilots can be delivered to FARPs/airbases only")
+    end
+
+    -- =====================
+    -- FSM Event Callbacks
+    -- =====================
+
+    --- Pilot down: a new downed pilot has been detected
+    function my_csar:OnAfterPilotDown(From, Event, To, Coordinate, DownedPilot)
+      local pilotName = (DownedPilot and DownedPilot.desc) or "Unknown"
+      msgAll(string.format("MAYDAY MAYDAY! %s is down and needs rescue!", pilotName), 15)
+      logOnly(string.format("[CSAR] PilotDown: %s", pilotName))
+    end
+
+    --- Rescued: a pilot has been picked up by a helicopter
+    function my_csar:OnAfterRescued(From, Event, To, HeliUnit, DownedPilot)
+      local pilotName = (DownedPilot and DownedPilot.desc) or "Unknown"
+      local heliName  = "Unknown"
+      pcall(function() heliName = HeliUnit:GetName() end)
+      msgAll(string.format("Pilot %s rescued by %s! Return to base for delivery.", pilotName, heliName), 12)
+      logOnly(string.format("[CSAR] Rescued: %s by %s", pilotName, heliName))
+
+      -- Award credits for rescue pickup
+      if CONFIG.enableCredits then
+        local playerName = nil
+        pcall(function() playerName = HeliUnit:GetPlayerName() end)
+        if playerName then
+          local reward = CONFIG.csarRescueReward or 100
+          MZ_Credits.add(playerName, reward)
+          out(string.format("[Credits] %s +%d (CSAR rescue)", playerName, reward), 5)
+        end
+      end
+    end
+
+    --- Returned: a pilot has been delivered to a MASH/FARP/airbase
+    function my_csar:OnAfterReturned(From, Event, To, HeliUnit, DownedPilot)
+      local pilotName = (DownedPilot and DownedPilot.desc) or "Unknown"
+      local heliName  = "Unknown"
+      pcall(function() heliName = HeliUnit:GetName() end)
+      msgAll(string.format("Pilot %s delivered safely! Great work, %s.", pilotName, heliName), 12)
+      logOnly(string.format("[CSAR] Returned: %s delivered by %s", pilotName, heliName))
+    end
+
+    -- Start CSAR
+    my_csar:__Start(5)
+
+    local optSummary = string.format(
+      "FARP=%s AI=%s crash=%s smoke=%s limit=%d MASH_prefixes=%s",
+      tostring(my_csar.allowFARPRescue),
+      tostring(my_csar.enableForAI),
+      tostring(my_csar.csarOncrash),
+      tostring(my_csar.autosmoke),
+      my_csar.maxdownedpilots or 0,
+      listToString(mashPrefixes))
+    out(string.format("MOOSE Ops.CSAR initialized and started (%s)", optSummary), 10)
+    msgAll("CSAR active! Helicopter pilots can rescue downed aircrews.\n"
+      .. "Eject from a damaged aircraft and SAR helicopters will be notified.\n"
+      .. "Use the F10 menu to locate and pick up survivors.", 15)
+  end)
+
+  if not ok then
+    out("MOOSE CSAR initialization FAILED: " .. tostring(err), 15)
+  end
+end
+
+-- =====================
+-- DRONE RECON FEATURE
+-- =====================
+-- Allows BLUE coalition to request an MQ-9 Reaper drone to orbit over a
+-- capture zone for reconnaissance.  One drone per zone at a time.
+-- Accessed via F10 menu: "Request Drone Recon" → <zone name>.
+
+local DRONE_CONFIG = {
+  altitude     = 4572,    -- Orbit altitude in meters (~15,000 ft AGL)
+  orbitRadius  = 3000,    -- Orbit circle radius in meters
+  loiterTime   = 1800,    -- Time on station in seconds (30 minutes)
+  unitType     = "MQ-9 Reaper",  -- DCS unit type name
+  speed        = 60,      -- Orbit speed in m/s (~120 knots)
+  groupPrefix  = "RECON_DRONE_", -- Prefix for spawned group names
+}
+
+local activeDrones = {}   -- { [zoneName] = { groupName = string, despawnTime = number } }
+local droneCounter = 0    -- Unique counter for group naming
+
+--- Spawn a recon drone to orbit over the given zone.
+-- @param zoneName  string  name of the capture zone
+local function spawnReconDrone(zoneName)
+  -- Prevent duplicate drones on the same zone
+  if activeDrones[zoneName] then
+    trigger.action.outTextForCoalition(coalition.side.BLUE,
+      string.format("[DRONE] A recon drone is already on station over %s.", getZoneDisplayName(zoneName)), 8)
+    return
+  end
+
+  local zonePoint = getZonePoint(zoneName)
+  if not zonePoint then
+    out("[DRONE] Cannot find zone point for " .. zoneName, 8)
+    return
+  end
+
+  droneCounter = droneCounter + 1
+  local groupName = DRONE_CONFIG.groupPrefix .. zoneName .. "_" .. droneCounter
+
+  -- Zone center coordinates
+  local cx = zonePoint.x
+  local cz = zonePoint.z
+  local groundAlt = 0
+  if land and land.getHeight then
+    groundAlt = land.getHeight({ x = cx, y = cz }) or 0
+  end
+  local orbitAlt = groundAlt + DRONE_CONFIG.altitude
+
+  -- Orbit pattern: two waypoints on opposite sides of the zone center
+  -- with an orbit task assigned to the first waypoint
+  local orbitTask = {
+    id = "ControlledTask",
+    params = {
+      task = {
+        id = "Orbit",
+        params = {
+          pattern  = "Circle",
+          point    = { x = cx, y = cz },
+          speed    = DRONE_CONFIG.speed,
+          altitude = orbitAlt,
+        },
+      },
+      stopCondition = { duration = DRONE_CONFIG.loiterTime },
+    },
+  }
+
+  local wp1 = {
+    x          = cx,
+    y          = cz,
+    alt        = orbitAlt,
+    alt_type   = "BARO",
+    type       = "Turning Point",
+    action     = "Turning Point",
+    speed      = DRONE_CONFIG.speed,
+    ETA        = 0,
+    ETA_locked = false,
+    task       = { id = "ComboTask", params = { tasks = { [1] = orbitTask } } },
+  }
+
+  local groupData = {
+    name    = groupName,
+    task    = "Reconnaissance",
+    route   = {
+      points = { wp1 },
+    },
+    hidden  = false,
+    units   = {
+      [1] = {
+        name       = groupName .. "_1",
+        type       = DRONE_CONFIG.unitType,
+        x          = cx,
+        y          = cz,
+        alt        = orbitAlt,
+        alt_type   = "BARO",
+        speed      = DRONE_CONFIG.speed,
+        skill      = "Excellent",
+        payload    = { pylons = {}, fuel = 2000, flare = 0, chaff = 0, gun = 0 },
+      },
+    },
+  }
+
+  -- Spawn the drone via coalition.addGroup
+  local ok, result = pcall(function()
+    return coalition.addGroup(country.id.USA, Group.Category.AIRPLANE, groupData)
+  end)
+
+  if ok and result then
+    activeDrones[zoneName] = {
+      groupName   = groupName,
+      despawnTime = now() + DRONE_CONFIG.loiterTime,
+    }
+
+    out(string.format("[DRONE] Recon drone '%s' spawned over %s at %d ft",
+      groupName, zoneName, math.floor(DRONE_CONFIG.altitude * 3.28084)), 8)
+
+    trigger.action.outTextForCoalition(coalition.side.BLUE,
+      string.format("Recon drone on station over %s. Loiter time: %d minutes.",
+        getZoneDisplayName(zoneName), math.floor(DRONE_CONFIG.loiterTime / 60)), 10)
+
+    -- Schedule despawn after loiter time
+    timer.scheduleFunction(function()
+      -- Despawn the drone group
+      local grp = Group.getByName(groupName)
+      if grp then
+        pcall(function() grp:destroy() end)
+      end
+      activeDrones[zoneName] = nil
+
+      out(string.format("[DRONE] Recon drone '%s' departing %s (loiter time expired)",
+        groupName, zoneName), 8)
+
+      trigger.action.outTextForCoalition(coalition.side.BLUE,
+        string.format("Recon drone over %s has departed.", getZoneDisplayName(zoneName)), 10)
+    end, nil, timer.getTime() + DRONE_CONFIG.loiterTime)
+  else
+    out("[DRONE] Failed to spawn drone over " .. zoneName .. ": " .. tostring(result), 10)
+  end
+end
+
+--- Build the F10 "Request Drone Recon" menu for BLUE coalition.
+local function buildDroneReconMenu()
+  local parentMenu = missionCommands.addSubMenuForCoalition(
+    coalition.side.BLUE, "Request Drone Recon")
+
+  for _, zoneName in ipairs(CONFIG.zoneNames) do
+    missionCommands.addCommandForCoalition(
+      coalition.side.BLUE,
+      getZoneDisplayName(zoneName),
+      parentMenu,
+      spawnReconDrone,
+      zoneName
+    )
+  end
+
+  out("[DRONE] Drone recon F10 menu created for " .. #CONFIG.zoneNames .. " zones", 8)
+end
+
+-- =====================
+-- ARTILLERY SUPPORT FEATURE
+-- =====================
+-- Allows BLUE coalition to call a 155mm artillery fire mission on a capture
+-- zone.  10 rounds staggered over ~15 seconds with a 5-minute cooldown per zone.
+-- Accessed via F10 menu: "Request Artillery Strike" → <zone name>.
+
+local ARTY_CONFIG = {
+  numRounds    = 10,      -- Number of explosions per fire mission
+  power        = 50,      -- Explosion power (roughly 155mm HE equivalent)
+  staggerDelay = 1.5,     -- Seconds between each round
+  cooldown     = 300,     -- Cooldown per zone in seconds (5 minutes)
+}
+
+local artyCooldowns = {}  -- { [zoneName] = lastFireTime (mission time) }
+
+--- Execute an artillery fire mission on the given zone.
+-- @param zoneName  string  name of the capture zone
+local function fireArtilleryMission(zoneName)
+  local curTime = now()
+
+  -- Check cooldown
+  if artyCooldowns[zoneName] then
+    local elapsed = curTime - artyCooldowns[zoneName]
+    if elapsed < ARTY_CONFIG.cooldown then
+      local remaining = math.ceil(ARTY_CONFIG.cooldown - elapsed)
+      trigger.action.outTextForCoalition(coalition.side.BLUE,
+        string.format("[ARTY] Artillery on %s is reloading. Available in %d seconds.",
+          getZoneDisplayName(zoneName), remaining), 8)
+      return
+    end
+  end
+
+  local zonePoint = getZonePoint(zoneName)
+  if not zonePoint then
+    out("[ARTY] Cannot find zone point for " .. zoneName, 8)
+    return
+  end
+
+  -- Get zone radius for spread calculation
+  local zoneRadius = 3000  -- default
+  if trigger and trigger.misc and trigger.misc.getZone then
+    local z = trigger.misc.getZone(zoneName)
+    if z and z.radius then zoneRadius = z.radius end
+  end
+
+  -- Mark cooldown start
+  artyCooldowns[zoneName] = curTime
+
+  local cx = zonePoint.x
+  local cz = zonePoint.z
+
+  out(string.format("[ARTY] Fire mission on %s: %d rounds, power=%d, spread=%dm",
+    zoneName, ARTY_CONFIG.numRounds, ARTY_CONFIG.power, math.floor(zoneRadius)), 8)
+
+  trigger.action.outTextForCoalition(coalition.side.BLUE,
+    string.format("Artillery fire mission on %s! %d rounds inbound — take cover!",
+      getZoneDisplayName(zoneName), ARTY_CONFIG.numRounds), 10)
+
+  -- Schedule each round with staggered timing
+  for i = 1, ARTY_CONFIG.numRounds do
+    local delay = (i - 1) * ARTY_CONFIG.staggerDelay
+
+    timer.scheduleFunction(function()
+      -- Random point within zone radius
+      local angle  = math.random() * 2 * math.pi
+      local dist   = math.random() * zoneRadius
+      local px     = cx + dist * math.cos(angle)
+      local pz     = cz + dist * math.sin(angle)
+
+      -- Get ground elevation at impact point
+      local groundY = 0
+      if land and land.getHeight then
+        groundY = land.getHeight({ x = px, y = pz }) or 0
+      end
+
+      local impactPoint = { x = px, y = groundY, z = pz }
+      trigger.action.explosion(impactPoint, ARTY_CONFIG.power)
+
+      -- Announce completion on last round
+      if i == ARTY_CONFIG.numRounds then
+        trigger.action.outTextForCoalition(coalition.side.BLUE,
+          string.format("Artillery fire mission on %s complete. Cooldown: %d minutes.",
+            getZoneDisplayName(zoneName), math.floor(ARTY_CONFIG.cooldown / 60)), 10)
+
+        out(string.format("[ARTY] Fire mission on %s complete", zoneName), 8)
+      end
+    end, nil, timer.getTime() + delay)
+  end
+end
+
+--- Build the F10 "Request Artillery Strike" menu for BLUE coalition.
+local function buildArtilleryMenu()
+  local parentMenu = missionCommands.addSubMenuForCoalition(
+    coalition.side.BLUE, "Request Artillery Strike")
+
+  for _, zoneName in ipairs(CONFIG.zoneNames) do
+    missionCommands.addCommandForCoalition(
+      coalition.side.BLUE,
+      getZoneDisplayName(zoneName),
+      parentMenu,
+      fireArtilleryMission,
+      zoneName
+    )
+  end
+
+  out("[ARTY] Artillery strike F10 menu created for " .. #CONFIG.zoneNames .. " zones", 8)
 end
 
 -- =====================
@@ -2583,6 +3274,9 @@ if timer and type(timer.scheduleFunction) == "function" and type(timer.getTime) 
         end
       end
 
+      -- Build zone display names from Mission Editor drawing labels
+      zoneDisplayNames = buildZoneDisplayNames(namesToUse)
+
       if CONFIG.smokeZones then
         for _, n in ipairs(namesToUse) do nativeSmoke(n) end
       end
@@ -2612,6 +3306,17 @@ if timer and type(timer.scheduleFunction) == "function" and type(timer.getTime) 
       if not ctldOk then
         out("startCTLD() CRASHED: " .. tostring(ctldErr), 20)
       end
+
+      logOnly("About to call startCSAR() (enableCSAR=" .. tostring(CONFIG.enableCSAR) .. ")")
+      local csarOk, csarErr = pcall(startCSAR)
+      if not csarOk then
+        out("startCSAR() CRASHED: " .. tostring(csarErr), 20)
+      end
+
+      -- Build F10 menus for drone recon and artillery support
+      pcall(buildDroneReconMenu)
+      pcall(buildArtilleryMenu)
+
       if CONFIG.testMode then out("Spawn manager started (test mode active)", 8) end
       return nil
     end
@@ -2648,6 +3353,8 @@ else
       end
       return tbl
     end)()
+    -- Build zone display names from Mission Editor drawing labels
+    zoneDisplayNames = buildZoneDisplayNames(namesToUse)
     if CONFIG.smokeZones then for _, n in ipairs(namesToUse) do nativeSmoke(n) end end
     local mooseZones = buildZones(namesToUse)
     startDetection(mooseZones)
@@ -2657,6 +3364,16 @@ else
     if not ctldOk2 then
       out("startCTLD() CRASHED: " .. tostring(ctldErr2), 20)
     end
+
+    logOnly("About to call startCSAR() (enableCSAR=" .. tostring(CONFIG.enableCSAR) .. ")")
+    local csarOk2, csarErr2 = pcall(startCSAR)
+    if not csarOk2 then
+      out("startCSAR() CRASHED: " .. tostring(csarErr2), 20)
+    end
+
+    -- Build F10 menus for drone recon and artillery support
+    pcall(buildDroneReconMenu)
+    pcall(buildArtilleryMenu)
   elseif #missing > 0 then
     out("Single-attempt init missing zone(s): " .. listToString(missing), 10)
   end
