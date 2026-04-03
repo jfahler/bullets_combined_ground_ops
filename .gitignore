@@ -1,9 +1,7 @@
 *.iml
 .idea/encodings.xml
 *.xml
-.git
-.kilo
-.vscode
+.*
 
 # Ignore DCS mission backups and logs
 *.miz.bak
