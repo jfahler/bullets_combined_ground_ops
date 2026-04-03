@@ -77,6 +77,25 @@ local CONFIG = {
   useUSAForBlue    = true,
   spawnCooldown    = 15,
 
+  -- =====================
+  -- SPAWN REALISM
+  -- =====================
+  -- These options make spawn waves look more natural and less "gamey".
+  -- Staggered spawns: groups within a wave spawn with small delays (column arrival).
+  -- Scatter: units spawn at random positions within the hub zone radius.
+  -- Variable composition: unit counts per wave vary within a configurable range.
+  -- Weighted route selection: routes are chosen with weighted randomness instead
+  -- of strict round-robin, so AI movement patterns are less predictable.
+  enableStaggeredSpawns = true,        -- Groups in a wave spawn with small delays
+  staggerDelayMin       = 3,           -- Min seconds between staggered group spawns
+  staggerDelayMax       = 12,          -- Max seconds between staggered group spawns
+  enableSpawnScatter    = true,        -- Randomize positions within hub zone radius
+  spawnScatterRadius    = 150,         -- Max scatter radius (meters) from hub center
+  enableVariableComp    = true,        -- Randomize unit counts within a range
+  variableCompRange     = 0.35,        -- Fraction +/- from base count (0.35 = 65%-135%)
+  enableWeightedRoutes  = true,        -- Weighted random route selection
+  routeRepeatPenalty    = 0.3,         -- Weight multiplier for the most-recently-used route
+
   -- UNIT QUOTAS (max alive at any time per side)
   blueQuota = {
     MBT  = 8,   -- M-1 Abrams
@@ -1137,7 +1156,7 @@ local function buildRoutePoints(zoneNames, action, speed)
   for _, zn in ipairs(zoneNames or {}) do
     local p = getZonePoint(zn)
     if p then
-      table.insert(pts, makeWaypoint(p.x, p.z or p.y or 0, action or "Off Road", speed or CONFIG.transitSpeed or 10))
+      table.insert(pts, makeWaypoint(p.x, p.z or 0, action or "Off Road", speed or CONFIG.transitSpeed or 10))
     end
   end
   return pts
@@ -1151,7 +1170,7 @@ local function buildApproachWaypoint(targetZoneName, prevX, prevY)
   local p = getZonePoint(targetZoneName)
   if not p then return nil end
   local tx = p.x
-  local ty = p.z or p.y or 0
+  local ty = p.z or 0
   local dist = CONFIG.tacticalApproachDist or 800
   local formation = CONFIG.tacticalFormation or "Rank"
   local spd = CONFIG.tacticalApproachSpeed or 6
@@ -1195,7 +1214,7 @@ local function buildRouteWithWaypoints(waypointZones, targetZones)
     for _, zn in ipairs(waypointZones) do
       local p = getZonePoint(zn)
       if p then
-        table.insert(pts, makeWaypoint(p.x, p.z or p.y or 0, "Off Road", transitSpeed))
+        table.insert(pts, makeWaypoint(p.x, p.z or 0, "Off Road", transitSpeed))
       end
     end
   end
@@ -1219,7 +1238,7 @@ local function buildRouteWithWaypoints(waypointZones, targetZones)
       -- Target zone waypoint itself (also in tactical formation)
       local p = getZonePoint(zn)
       if p then
-        table.insert(pts, makeWaypoint(p.x, p.z or p.y or 0, formation, approachSpeed))
+        table.insert(pts, makeWaypoint(p.x, p.z or 0, formation, approachSpeed))
       end
     end
   end
@@ -1282,6 +1301,56 @@ local function radialOffsets(cx, cy, count, radius)
   return pts
 end
 
+--- Generate randomized scatter offsets within a radius (for realistic spawn placement).
+-- Units are placed at random positions within a circle instead of a neat radial ring.
+-- @param cx     number  center X
+-- @param cy     number  center Y
+-- @param count  number  how many positions to generate
+-- @param radius number  maximum scatter distance from center
+-- @return table  array of {x, y, hdg}
+local function scatterOffsets(cx, cy, count, radius)
+  local pts = {}
+  radius = radius or 50
+  for i = 1, count do
+    -- Random polar coordinates for natural spread
+    local ang = math.random() * 2 * math.pi
+    local dist = math.sqrt(math.random()) * radius  -- sqrt for uniform area distribution
+    pts[i] = {
+      x   = cx + dist * math.cos(ang),
+      y   = cy + dist * math.sin(ang),
+      hdg = ang + math.pi,  -- face roughly toward center
+    }
+  end
+  return pts
+end
+
+--- Vary a base unit count within CONFIG.variableCompRange.
+-- Returns a random integer in [base * (1 - range), base * (1 + range)], clamped to [1, base*2].
+-- @param base  number  the nominal unit count
+-- @return number  randomized count (at least 1)
+local function varyCount(base)
+  if not CONFIG.enableVariableComp or base <= 1 then return base end
+  local range = CONFIG.variableCompRange or 0.35
+  local lo = math.max(1, math.floor(base * (1 - range) + 0.5))
+  local hi = math.max(lo, math.ceil(base * (1 + range)))
+  return math.random(lo, hi)
+end
+
+--- Choose spawn position offsets: scattered if enabled, otherwise radial.
+-- @param cx     number  center X
+-- @param cy     number  center Y
+-- @param count  number  how many positions
+-- @param radius number  spread distance
+-- @return table  array of {x, y, hdg}
+local function spawnOffsets(cx, cy, count, radius)
+  if CONFIG.enableSpawnScatter then
+    local scatterR = CONFIG.spawnScatterRadius or 150
+    return scatterOffsets(cx, cy, count, math.max(radius, scatterR))
+  else
+    return radialOffsets(cx, cy, count, radius)
+  end
+end
+
 --- Spawn a vehicle group with N units of a given type, respecting quota limits.
 -- Shared helper used by both BLUE and RED spawn packages to avoid code duplication.
 -- @param baseName   string  prefix for group/unit names
@@ -1297,9 +1366,11 @@ end
 -- @param routePoints table  DCS route waypoints
 local function spawnVehicleGroup(baseName, typeName, requested, cx, cy, radius, startIdx, quotaCat, room, countryId, routePoints)
   local t = math.floor(now())
-  local n = requested
+  -- Apply variable composition: randomize the requested count
+  local varied = varyCount(requested)
+  local n = varied
   if quotaCat and room and room[quotaCat] then
-    n = math.min(requested, room[quotaCat])
+    n = math.min(varied, room[quotaCat])
     if n > 0 then
       room[quotaCat] = room[quotaCat] - n  -- decrement for subsequent calls
     end
@@ -1308,7 +1379,8 @@ local function spawnVehicleGroup(baseName, typeName, requested, cx, cy, radius, 
     if CONFIG.testMode then out(baseName .. " skipped (quota full)", 5) end
     return nil
   end
-  local pts = radialOffsets(cx, cy, math.max(n, 4), radius)
+  -- Use scattered offsets for natural placement, or radial if scatter disabled
+  local pts = spawnOffsets(cx, cy, math.max(n, 4), radius)
   local units = {}
   for i = 1, n do
     local p = pts[((startIdx or 1) + i - 2) % #pts + 1]
@@ -1448,7 +1520,7 @@ local function tradeAndGarrison(coalitionSide, zoneName)
     return
   end
   local cx = zonePoint.x
-  local cy = zonePoint.z or zonePoint.y or 0
+  local cy = zonePoint.z or 0
 
   -- Collect all tracked units and filter to those below health threshold
   local allUnits = collectTrackedUnits(coalitionSide, typeMap)
@@ -1537,13 +1609,45 @@ local function tradeAndGarrison(coalitionSide, zoneName)
 end
 
 -- =====================
+-- STAGGERED SPAWN HELPER
+-- =====================
+-- When staggered spawns are enabled, each sub-group in a wave is scheduled
+-- with a random delay (simulating column movement from a staging area).
+-- Returns a cumulative delay so callers can chain multiple staggered calls.
+
+--- Generate a random stagger delay in [staggerDelayMin, staggerDelayMax].
+-- @return number  delay in seconds
+local function nextStaggerDelay()
+  local lo = CONFIG.staggerDelayMin or 3
+  local hi = CONFIG.staggerDelayMax or 12
+  if lo >= hi then return lo end
+  return lo + math.random() * (hi - lo)
+end
+
+--- Schedule a spawn call with an optional stagger delay.
+-- If staggering is disabled, calls the function immediately.
+-- @param fn       function  the spawn function to call (no args)
+-- @param delay    number    seconds to delay (0 = immediate)
+local function scheduleSpawn(fn, delay)
+  if not CONFIG.enableStaggeredSpawns or delay <= 0 then
+    fn()
+    return
+  end
+  if timer and type(timer.scheduleFunction) == "function" then
+    timer.scheduleFunction(function() pcall(fn); return nil end, nil, timer.getTime() + delay)
+  else
+    fn()  -- fallback: no timer available
+  end
+end
+
+-- =====================
 -- BLUE SPAWN PACKAGES (quota-aware)
 -- =====================
 local function spawnInfantryPackage(atPoint, routePoints)
   local t = math.floor(now())
   local countryBlue = CONFIG.useUSAForBlue and country.id.USA or country.id.CJTF_BLUE
   local cx = atPoint.x
-  local cy = atPoint.z or atPoint.y or 0
+  local cy = atPoint.z or 0
 
   -- Check APC quota for the escort Stryker
   local alive = countAliveByClass(coalition.side.BLUE, BLUE_TYPE_CLASS)
@@ -1553,7 +1657,7 @@ local function spawnInfantryPackage(atPoint, routePoints)
     out(string.format("BLUE INF quota check: APC alive=%d room=%d", alive.APC, room.APC), 5)
   end
 
-  local off = radialOffsets(cx, cy, 10, 8)
+  local off = spawnOffsets(cx, cy, 10, 8)
 
   -- 6x M4, 1x M249, 1x RPG-7 (8 infantry -- not quota-limited)
   local infUnits = {}
@@ -1570,14 +1674,17 @@ local function spawnInfantryPackage(atPoint, routePoints)
   local gInf = mkGroup(string.format("BLUE_INF_%d", t), "vehicle", infUnits, routePoints)
   addGroupSafe(countryBlue, gInf)
 
-  -- 1x Stryker APC escort (only if quota allows)
+  -- 1x Stryker APC escort (staggered: arrives shortly after infantry)
   if room.APC >= 1 then
-    local vpt = off[idx] or { x = cx + 12, y = cy, hdg = 0 }
-    local vehUnits = {
-      mkUnit(string.format("BL_STRYKER_%d", t), "M1126 Stryker ICV", vpt.x, vpt.y, vpt.hdg)
-    }
-    local gVeh = mkGroup(string.format("BLUE_STRYKER_%d", t), "vehicle", vehUnits, routePoints)
-    addGroupSafe(countryBlue, gVeh)
+    local delay = nextStaggerDelay()
+    scheduleSpawn(function()
+      local vpt = off[idx] or { x = cx + 12, y = cy, hdg = 0 }
+      local vehUnits = {
+        mkUnit(string.format("BL_STRYKER_%d", t), "M1126 Stryker ICV", vpt.x, vpt.y, vpt.hdg)
+      }
+      local gVeh = mkGroup(string.format("BLUE_STRYKER_%d", t), "vehicle", vehUnits, routePoints)
+      addGroupSafe(countryBlue, gVeh)
+    end, delay)
   else
     logOnly("BLUE APC quota reached -- Stryker escort skipped")
   end
@@ -1586,7 +1693,7 @@ end
 local function spawnArmorPackage(atPoint, routePoints)
   local countryBlue = CONFIG.useUSAForBlue and country.id.USA or country.id.CJTF_BLUE
   local cx = atPoint.x
-  local cy = atPoint.z or atPoint.y or 0
+  local cy = atPoint.z or 0
 
   local alive = countAliveByClass(coalition.side.BLUE, BLUE_TYPE_CLASS)
   local room = quotaRoom(CONFIG.blueQuota, alive)
@@ -1596,17 +1703,40 @@ local function spawnArmorPackage(atPoint, routePoints)
       alive.MBT, room.MBT, alive.IFV, room.IFV, alive.APC, room.APC), 5)
   end
 
+  -- Staggered spawn: each vehicle group arrives with a small delay
+  local cumDelay = 0
+
   -- Quota-limited combat vehicles (uses shared spawnVehicleGroup)
-  spawnVehicleGroup("BLUE_ABRAMS",  "M-1 Abrams",      4, cx, cy, 30, 1, "MBT", room, countryBlue, routePoints)
-  spawnVehicleGroup("BLUE_BRADLEY", "M-2 Bradley",      4, cx, cy, 40, 2, "IFV", room, countryBlue, routePoints)
-  spawnVehicleGroup("BLUE_M113",    "M-113",            2, cx, cy, 25, 3, "APC", room, countryBlue, routePoints)
+  scheduleSpawn(function()
+    spawnVehicleGroup("BLUE_ABRAMS",  "M-1 Abrams",      4, cx, cy, 30, 1, "MBT", room, countryBlue, routePoints)
+  end, cumDelay)
+  cumDelay = cumDelay + nextStaggerDelay()
+
+  scheduleSpawn(function()
+    spawnVehicleGroup("BLUE_BRADLEY", "M-2 Bradley",      4, cx, cy, 40, 2, "IFV", room, countryBlue, routePoints)
+  end, cumDelay)
+  cumDelay = cumDelay + nextStaggerDelay()
+
+  scheduleSpawn(function()
+    spawnVehicleGroup("BLUE_M113",    "M-113",            2, cx, cy, 25, 3, "APC", room, countryBlue, routePoints)
+  end, cumDelay)
+  cumDelay = cumDelay + nextStaggerDelay()
 
   -- Support vehicles (not quota-limited: pass nil for quotaCat)
-  spawnVehicleGroup("BLUE_CHAPARRAL", "M48 Chaparral", 1, cx, cy, 22, 1, nil, room, countryBlue, routePoints)
-  spawnVehicleGroup("BLUE_TOW",       "M1045 HMMWV TOW", 2, cx, cy, 20, 2, nil, room, countryBlue, routePoints)
+  scheduleSpawn(function()
+    spawnVehicleGroup("BLUE_CHAPARRAL", "M48 Chaparral", 1, cx, cy, 22, 1, nil, room, countryBlue, routePoints)
+  end, cumDelay)
+  cumDelay = cumDelay + nextStaggerDelay()
+
+  scheduleSpawn(function()
+    spawnVehicleGroup("BLUE_TOW",       "M1045 HMMWV TOW", 2, cx, cy, 20, 2, nil, room, countryBlue, routePoints)
+  end, cumDelay)
+  cumDelay = cumDelay + nextStaggerDelay()
 
   -- German Gepard (BLUE coalition country) for AA
-  spawnVehicleGroup("BLUE_GEPARD", "Gepard", 1, cx, cy, 28, 1, nil, room, country.id.GERMANY, routePoints)
+  scheduleSpawn(function()
+    spawnVehicleGroup("BLUE_GEPARD", "Gepard", 1, cx, cy, 28, 1, nil, room, country.id.GERMANY, routePoints)
+  end, cumDelay)
 end
 
 -- =====================
@@ -1614,24 +1744,46 @@ end
 -- =====================
 local function spawnRedWaveA(pt, routePoints, room)
   local cx = pt.x
-  local cy = pt.z or pt.y or 0
+  local cy = pt.z or 0
   local cid = country.id.RUSSIA
+  local cumDelay = 0
 
-  -- Wave A: BTR-80 + BMP-2 + ZSU-23-4 Shilka
-  spawnVehicleGroup("RED_BTR80",  "BTR-80",          3, cx, cy, 26, 1, "APC", room, cid, routePoints)
-  spawnVehicleGroup("RED_BMP2",   "BMP-2",           3, cx, cy, 30, 2, "IFV", room, cid, routePoints)
-  spawnVehicleGroup("RED_SHILKA", "ZSU-23-4 Shilka", 1, cx, cy, 20, 1, nil,   room, cid, routePoints)  -- AA not quota-limited
+  -- Wave A: BTR-80 + BMP-2 + ZSU-23-4 Shilka (staggered)
+  scheduleSpawn(function()
+    spawnVehicleGroup("RED_BTR80",  "BTR-80",          3, cx, cy, 26, 1, "APC", room, cid, routePoints)
+  end, cumDelay)
+  cumDelay = cumDelay + nextStaggerDelay()
+
+  scheduleSpawn(function()
+    spawnVehicleGroup("RED_BMP2",   "BMP-2",           3, cx, cy, 30, 2, "IFV", room, cid, routePoints)
+  end, cumDelay)
+  cumDelay = cumDelay + nextStaggerDelay()
+
+  scheduleSpawn(function()
+    spawnVehicleGroup("RED_SHILKA", "ZSU-23-4 Shilka", 1, cx, cy, 20, 1, nil,   room, cid, routePoints)  -- AA not quota-limited
+  end, cumDelay)
 end
 
 local function spawnRedWaveB(pt, routePoints, room)
   local cx = pt.x
-  local cy = pt.z or pt.y or 0
+  local cy = pt.z or 0
   local cid = country.id.RUSSIA
+  local cumDelay = 0
 
-  -- Wave B: T-72B + BMP-2 + SA-9
-  spawnVehicleGroup("RED_T72B", "T-72B",         4, cx, cy, 32, 1, "MBT", room, cid, routePoints)
-  spawnVehicleGroup("RED_BMP2", "BMP-2",         2, cx, cy, 26, 2, "IFV", room, cid, routePoints)
-  spawnVehicleGroup("RED_SA9",  "Strela-1 9P31", 1, cx, cy, 22, 1, nil,   room, cid, routePoints)  -- AA not quota-limited
+  -- Wave B: T-72B + BMP-2 + SA-9 (staggered)
+  scheduleSpawn(function()
+    spawnVehicleGroup("RED_T72B", "T-72B",         4, cx, cy, 32, 1, "MBT", room, cid, routePoints)
+  end, cumDelay)
+  cumDelay = cumDelay + nextStaggerDelay()
+
+  scheduleSpawn(function()
+    spawnVehicleGroup("RED_BMP2", "BMP-2",         2, cx, cy, 26, 2, "IFV", room, cid, routePoints)
+  end, cumDelay)
+  cumDelay = cumDelay + nextStaggerDelay()
+
+  scheduleSpawn(function()
+    spawnVehicleGroup("RED_SA9",  "Strela-1 9P31", 1, cx, cy, 22, 1, nil,   room, cid, routePoints)  -- AA not quota-limited
+  end, cumDelay)
 end
 
 -- =====================
@@ -1741,12 +1893,37 @@ local function startSpawnManager(mooseZones)
   end
 
   -- =====================
-  -- ROUTE CYCLING: each wave picks a different route
+  -- ROUTE SELECTION: each wave picks a route (weighted random or round-robin)
   -- =====================
   local blueRouteIdx = 0
   local redRouteIdx  = 0
 
-  --- Build the next route for a given side, cycling through available route variants.
+  --- Pick a route index using weighted random selection.
+  -- The most-recently-used route gets a reduced weight so the same path
+  -- isn't picked twice in a row (but it still CAN be, just less likely).
+  -- @param numRoutes  number  total available routes
+  -- @param lastIdx    number  last route index used (0 = none)
+  -- @return number  selected 1-based route index
+  local function weightedRouteSelect(numRoutes, lastIdx)
+    if numRoutes <= 1 then return 1 end
+    local penalty = CONFIG.routeRepeatPenalty or 0.3
+    local weights = {}
+    local totalWeight = 0
+    for i = 1, numRoutes do
+      local w = (i == lastIdx) and penalty or 1.0
+      weights[i] = w
+      totalWeight = totalWeight + w
+    end
+    local roll = math.random() * totalWeight
+    local cumulative = 0
+    for i = 1, numRoutes do
+      cumulative = cumulative + weights[i]
+      if roll <= cumulative then return i end
+    end
+    return numRoutes  -- safety fallback
+  end
+
+  --- Build the next route for a given side, using weighted random or round-robin.
   -- Shared logic for both BLUE and RED to eliminate duplication.
   -- @param sideLabel    string  "BLUE" or "RED" (for log messages)
   -- @param advanceRoute table   ordered list of zone names for this side
@@ -1757,7 +1934,12 @@ local function startSpawnManager(mooseZones)
   local function getNextRoute(sideLabel, advanceRoute, capturedMap, routes, routeIdx)
     local remaining = getRemainingRoute(advanceRoute, capturedMap)
     if routes and #routes > 0 then
-      routeIdx = (routeIdx % #routes) + 1
+      -- Choose route: weighted random or strict round-robin
+      if CONFIG.enableWeightedRoutes then
+        routeIdx = weightedRouteSelect(#routes, routeIdx)
+      else
+        routeIdx = (routeIdx % #routes) + 1
+      end
       local waypoints = routes[routeIdx]
       -- Filter out waypoint zones that don't exist in the ME (graceful degradation)
       local validWp = {}
@@ -1887,8 +2069,12 @@ local function startSpawnManager(mooseZones)
 
   local function redSpawnPoint()
     local key = RED.active
-    local zname = (key == "start" and RED.hubs.start) or (key == "middle" and RED.hubs.middle)
-    return zname and getZonePoint(zname) or nil
+    local zname = RED.hubs[key]
+    if not zname then
+      logOnly("RED hub key '" .. tostring(key) .. "' not found in redSpawnHubs")
+      return nil
+    end
+    return getZonePoint(zname)
   end
 
   local function doRedWave()
@@ -1952,7 +2138,7 @@ local function startSpawnManager(mooseZones)
     end
   end
 
-  doRedWave()
+  if CONFIG.spawnOnStart then doRedWave() end
   do
     local firstInt = (CONFIG.firstSpawnIntervalRed or CONFIG.firstSpawnInterval or CONFIG.spawnInterval)
     if firstInt and firstInt > 0 then
@@ -2123,6 +2309,17 @@ local function startSpawnManager(mooseZones)
             if CONFIG.testMode then
               out(string.format("%s is guarded", getZoneDisplayName(zn)), 3)
             end
+          end
+
+          -- =====================
+          -- OnAfterEmpty: fires when no ground units remain in the zone
+          -- =====================
+          function zcz:OnAfterEmpty(From, Event, To)
+            if CONFIG.testMode then
+              out(string.format("%s is empty (no ground units)", getZoneDisplayName(zn)), 3)
+            end
+            -- Revert zone markup to neutral when no units are present
+            updateZoneMarkup(zIdx, 0, zn)
           end
 
           -- Start the capture zone monitoring

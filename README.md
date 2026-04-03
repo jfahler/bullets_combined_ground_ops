@@ -1,6 +1,6 @@
 # Bullet's Ground Ops
 
-A plug-and-play ground warfare scripting framework for DCS World that automates ground force spawning, zone capture detection, and dynamic battlefield management. Designed for easy integration into DCS missions with CTLD support, using MOOSE and optionally MIST as external dependencies.
+A plug-and-play ground warfare scripting framework for DCS World that automates ground force spawning, zone capture detection, and dynamic battlefield management. Designed for easy integration into DCS missions with CTLD/CSAR support, using MOOSE and optionally MIST as external dependencies.
 
 ## Overview
 
@@ -11,16 +11,20 @@ This script provides a comprehensive system for creating dynamic ground warfare 
 - Visual zone marking with DCS Markup API coloring and optional smoke
 - Periodic BLUE unit detection over defined zones
 - Dynamic spawning of BLUE and RED ground forces with waypoint routes
+- **Realistic spawn behavior**: staggered timing, scattered positions, variable composition, weighted route selection
 - Unit quota enforcement (limited numbers of each vehicle type alive at once)
 - Sequential zone attack system (groups attack first uncaptured zone, then advance)
 - Multiple route support with waypoint zones for varied attack paths
 - Tactical formations (groups deploy into line abreast when approaching zones)
+- Garrison trade system (swap damaged attackers for fresh defenders on capture)
 - Enemy C2 destruction system (destroying named static objects cuts off RED reinforcements)
 - Automatic zone capture detection with FSM events (using ZONE_CAPTURE_COALITION when available)
 - DCS Markup API zone coloring (zones change color on capture)
 - Persistence: save/load zone state across server restarts
 - Player Credits system: earn credits for kills, zone captures
 - Optional CTLD integration for helicopter troop/cargo transport
+- Optional CSAR integration for combat search and rescue
+- F10 menu support for drone recon and artillery fire missions
 
 ## Features
 
@@ -31,6 +35,8 @@ This script provides a comprehensive system for creating dynamic ground warfare 
 - **Visual Feedback**: Zone coloring via DCS Markup API (Foothold-style) with optional smoke drawing
 - **Persistence**: Save/load mission state across server restarts
 - **Credit System**: Foothold-inspired economy rewarding players for kills and captures
+- **Drone Recon**: F10 menu to request MQ-9 Reaper drone orbits over capture zones
+- **Artillery Support**: F10 menu to call 155mm fire missions on capture zones with cooldown
 
 ### AI Ground Forces
 - **BLUE Forces**: US Marine Corps/Army units (M1 Abrams, M2 Bradley, M113, Stryker, M48 Chaparral, HMMWV TOW, Gepard)
@@ -38,22 +44,37 @@ This script provides a comprehensive system for creating dynamic ground warfare 
 - **Quota System**: Limits on simultaneous unit types (MBT, IFV, APC) to prevent performance issues
 - **Sequential Attack**: All groups focus on the first uncaptured zone before advancing
 - **Multiple Routes**: Configurable waypoint zones for varied attack paths
+- **Weighted Route Selection**: Routes are chosen with weighted randomness so AI movement is less predictable
 - **Tactical Formations**: Units deploy into Rank formation when approaching targets
 - **Dynamic Hub Advancement**: Capture zones move spawn points forward
+- **Garrison Trade**: Damaged attackers are swapped for fresh garrison defenders on zone capture
+
+### Spawn Realism
+- **Staggered Spawns**: Groups within a wave spawn with small random delays (3-12s default), simulating column movement from a staging area instead of all units popping in at once
+- **Scatter Positioning**: Units spawn at random positions within the hub zone radius using uniform-area distribution, not a neat radial ring
+- **Variable Composition**: Unit counts per wave vary randomly within a configurable range (+/-35% default), so no two waves look identical
+- **Weighted Route Selection**: Routes are chosen with weighted randomness; the most-recently-used route gets a reduced selection weight to avoid predictable patterns
 
 ### CTLD Integration (Optional)
 - Helicopter troop and vehicle transport capabilities
-- Support for both MOOSE Ops.CTLD and ciribob CTLD implementations
+- MOOSE Ops.CTLD implementation (ciribob standalone CTLD is no longer supported)
 - Configurable LOAD, DROP, and MOVE zones
 - Support for modded helicopters (UH-60L, CH-47F, C-130, Hercules) with custom unit type capabilities
 - Engineer and vehicle crate systems
 - FARP crate deployment
 
+### CSAR Integration (Optional)
+- MOOSE Ops.CSAR for combat search and rescue
+- Automatic downed pilot detection on ejection events
+- F10 menu for SAR helicopter pilots to locate and pick up survivors
+- Configurable MASH delivery points, smoke, beacons, and credit rewards
+- Support for modded helicopters via custom pilot SET_GROUP
+
 ## Files in This Repository
 
 | File | Description |
 |------|-------------|
-| `scripts/bullets_ground_ops_V09B.lua` | Main ground ops script — handles zone management, spawning, capture detection, CTLD, persistence, and credits |
+| `scripts/bullets_ground_ops_V094_33026.lua` | Main ground ops script — handles zone management, spawning, capture detection, CTLD, CSAR, persistence, and credits |
 | `scripts/bullets_ground_ops_diagnostic.lua` | Diagnostic/troubleshooting script — verifies MOOSE availability, checks ME trigger zones, and reports status |
 
 ## Prerequisites (External Dependencies)
@@ -64,7 +85,7 @@ These frameworks are **not included** in this repository. You must obtain and lo
 |------------|-----------|-------|
 | **MOOSE Framework** | **Required** | Must be loaded before this script. Provides ZONE, SET_GROUP, SCHEDULER, ZONE_CAPTURE_COALITION, and other core classes. Download from [MOOSE GitHub](https://github.com/FlightControl-Master/MOOSE). |
 | **MIST Framework** | Recommended | Not a hard dependency, but recommended for broader scripting compatibility. |
-| **CTLD** | Optional | Either MOOSE Ops.CTLD or ciribob standalone CTLD. Only needed if `CONFIG.enableCTLD = true`. |
+| **CTLD** | Optional | MOOSE Ops.CTLD (ciribob standalone is no longer supported). Only needed if `CONFIG.enableCTLD = true`. |
 | **DCS World** | **Required** | 2.5 or later. Markup API features (zone coloring) require DCS 2.8+. |
 
 ## Mission Editor Setup
@@ -114,14 +135,14 @@ Create these as **late-activated** BLUE groups in the Mission Editor:
    - Action: DO SCRIPT FILE → Load your `Moose.lua` (MOOSE core library)
 
 2. **TIME MORE Trigger** (1 second delay)
-   - Action: DO SCRIPT FILE → `scripts/bullets_ground_ops_V09B.lua`
+   - Action: DO SCRIPT FILE → `scripts/bullets_ground_ops_V094_33026.lua`
 
 3. *(Optional)* **TIME MORE Trigger** (1 second delay)
    - Action: DO SCRIPT FILE → `scripts/bullets_ground_ops_diagnostic.lua` (for troubleshooting)
 
 ## Configuration Options
 
-All configuration is done in the `CONFIG` table at the top of `scripts/bullets_ground_ops_V09B.lua`. Key sections include:
+All configuration is done in the `CONFIG` table at the top of `scripts/bullets_ground_ops_V094_33026.lua`. Key sections include:
 
 ### Basic Settings
 - `zoneNames`: List of capture zone names (default: `{"Alpha", "Bravo", "Charlie", "Delta", "Echo"}`)
@@ -136,11 +157,21 @@ All configuration is done in the `CONFIG` table at the top of `scripts/bullets_g
 - `spawnZones`: Defines BLUE spawn hub zone names
 - `redSpawnHubs`: Defines RED spawn hub zone names
 - `spawnInterval`: Seconds between spawn waves (default: 300)
-- `spawnOnStart`: Spawn initial wave at mission start
+- `spawnOnStart`: Spawn initial wave at mission start (gates both BLUE and RED)
 - `spawnAlternating`: Alternate between infantry and armor waves
 - `blueQuota`/`redQuota`: Maximum alive units per type (MBT, IFV, APC)
 - `spawnCooldown`: Minimum seconds between spawn waves (default: 15)
 - `useUSAForBlue`: Use USA country ID for BLUE forces (vs CJTF_BLUE)
+
+### Spawn Realism Settings
+- `enableStaggeredSpawns`: Groups in a wave spawn with random delays (default: `true`)
+- `staggerDelayMin`/`staggerDelayMax`: Range of stagger delay in seconds (default: 3-12)
+- `enableSpawnScatter`: Randomize unit positions within hub zone radius (default: `true`)
+- `spawnScatterRadius`: Max scatter distance in meters (default: 150)
+- `enableVariableComp`: Randomize unit counts per wave (default: `true`)
+- `variableCompRange`: Fraction +/- from base count (default: 0.35 = 65%-135%)
+- `enableWeightedRoutes`: Use weighted random route selection (default: `true`)
+- `routeRepeatPenalty`: Weight multiplier for the most-recently-used route (default: 0.3)
 
 ### Route Settings
 - `blueAdvanceRoute`/`redAdvanceRoute`: Ordered list of zones to capture
@@ -149,6 +180,13 @@ All configuration is done in the `CONFIG` table at the top of `scripts/bullets_g
 - `tacticalFormation`: Formation to use near targets (`"Rank"`, `"Vee"`, etc.)
 - `tacticalApproachDist`: Distance to deploy formation (meters, default: 800)
 - `transitSpeed`/`tacticalApproachSpeed`: Movement speeds (m/s)
+
+### Garrison Trade Settings
+- `enableGarrisonTrade`: Swap damaged attackers for fresh garrison defenders on capture (default: `true`)
+- `garrisonHealthPct`: Health threshold for trade eligibility (default: 0.5)
+- `garrisonMaxTrades`: Max units to trade per capture event (default: 4)
+- `garrisonSpreadRadius`: Spread radius for spawned garrison units (default: 50m)
+- `garrisonMatchType`: Replace with same unit type or use fallback types (default: `true`)
 
 ### CTLD Settings
 - `enableCTLD`: Enable helicopter transport system
@@ -160,6 +198,17 @@ All configuration is done in the `CONFIG` table at the top of `scripts/bullets_g
 - `ctldPatchLogging`: Patch ciribob CTLD's `ctld.p()` at runtime to prevent circular-reference crashes (default: `true`)
 - `ctldMaxLogDepth`: Max table nesting depth for `ctld.p()` serialization (default: `10`)
 - `ctldSuppressInfoLogs`: Suppress `ctld.logInfo()` messages to reduce log volume; errors/warnings always kept (default: `false`)
+
+### CSAR Settings
+- `enableCSAR`: Enable combat search and rescue system
+- `csarTemplate`: Late-activated unit template name for downed pilots (default: `"Downed Pilot"`)
+- `csarHeloPrefixes`: Group name prefixes for CSAR helicopters
+- `csarUseOwnPilotSet`: Bypass category filter for modded helos (default: `true`)
+- `csarAllowFARPRescue`: Allow rescue at FARPs and airbases (default: `true`)
+- `csarEnableForAI`: Generate downed pilots for AI ejections (default: `true`)
+- `csarMaxDownedPilots`: Max simultaneous downed pilots on map (default: 25)
+- `csarMashPrefixes`: Name prefixes for MASH delivery points (default: `{"MASH"}`)
+- `csarRescueReward`: Credit reward for successful rescue (default: 100)
 
 ### Advanced Features
 - `enablePersistence`: Save/load state across restarts (requires `lfs` + `io` in DCS env)
@@ -181,6 +230,10 @@ All configuration is done in the `CONFIG` table at the top of `scripts/bullets_g
    - Starts periodic reinforcement schedulers
 5. **Dynamic Spawning**:
    - Checks quotas before spawning (per-type MBT/IFV/APC limits)
+   - Applies variable composition (randomized unit counts within configurable range)
+   - Positions units with scatter offsets (random positions within hub zone radius)
+   - Staggers group spawns with random delays (simulating column movement)
+   - Selects routes via weighted randomness (less predictable AI movement)
    - Cycles through infantry/armor packages (alternating waves)
    - Uses waypoint routes with tactical approach waypoints
    - Advances spawn hubs when zones are captured
@@ -188,14 +241,23 @@ All configuration is done in the `CONFIG` table at the top of `scripts/bullets_g
    - Updates zone control state
    - Changes zone colors via markup API
    - Awards capture credits to nearby players (if credits enabled)
+   - Trades damaged attackers for fresh garrison defenders (garrison trade)
    - Triggers hub advancement and spawn waves
    - Saves state if persistence enabled
 7. **CTLD Integration** (if enabled):
-   - Detects available CTLD implementation (MOOSE Ops.CTLD or ciribob)
+   - Detects MOOSE Ops.CTLD
    - Registers helicopter unit types and modded helo capabilities
    - Configures LOAD/DROP/MOVE zones
    - Adds troop, engineer, vehicle, and FARP cargo
    - Handles CTLD events (troop deployments, crate builds, pickups)
+8. **CSAR Integration** (if enabled):
+   - Detects MOOSE Ops.CSAR
+   - Monitors ejection events and spawns downed pilot units
+   - Provides F10 menu for SAR helicopter pilots
+   - Awards credits for successful rescues
+9. **Player Support Features**:
+   - F10 "Request Drone Recon" menu: spawns MQ-9 Reaper orbit over capture zones
+   - F10 "Request Artillery Strike" menu: calls 155mm fire missions with cooldown
 
 ## Workflow Diagram
 
@@ -220,10 +282,11 @@ flowchart TD
     P --> Q[Advance Spawn Hub]
     Q --> R[Spawn Wave]
     R --> S[Check Quotas]
-    S -->|Room Available| T[Build Route]
+    S -->|Room Available| T[Vary Composition & Build Route]
     S -->|No Room| U[Skip Spawn]
-    T --> V[Spawn Infantry/Armor Package]
-    V --> W[Apply Tactical Formation]
+    T --> V[Stagger Spawn Sub-Groups]
+    V --> V2[Scatter Unit Positions]
+    V2 --> W[Apply Tactical Formation]
     W --> X[Move Toward Target]
     X --> Y{Reached Zone?}
     Y -->|Yes| Z[Engage Defenders]
@@ -267,6 +330,16 @@ All diagnostic messages are prefixed with `[MZ-DIAG]` in both on-screen text and
 - Modify quota categories in `BLUE_TYPE_CLASS`/`RED_TYPE_CLASS` tables
 - Adjust quota limits in `CONFIG.blueQuota`/`CONFIG.redQuota` tables
 
+### Tuning Spawn Realism
+- Set `enableStaggeredSpawns = false` to revert to instant wave spawning
+- Adjust `staggerDelayMin`/`staggerDelayMax` to control column arrival timing
+- Set `enableSpawnScatter = false` to revert to neat radial unit placement
+- Adjust `spawnScatterRadius` to control how spread out units are at spawn
+- Set `enableVariableComp = false` to get exact unit counts every wave
+- Adjust `variableCompRange` (0.0-1.0) to control how much counts vary
+- Set `enableWeightedRoutes = false` to revert to strict round-robin route cycling
+- Adjust `routeRepeatPenalty` (0.0-1.0) to control route selection randomness
+
 ### Changing Visual Appearance
 - Modify `CONFIG.zoneColors` for different zone colors (red, blue, neutral)
 - Adjust `CONFIG.drawLineColor`, `CONFIG.drawFillColor`, `CONFIG.drawLineWidth`
@@ -278,16 +351,33 @@ All diagnostic messages are prefixed with `[MZ-DIAG]` in both on-screen text and
 - Add group name prefixes to `CONFIG.ctldHeloPrefixes`
 - Set `CONFIG.ctldUseOwnPilotSet = true` to bypass category filtering for modded aircraft
 
+## Changelog
+
+### V094 (Current)
+**Bug Fixes:**
+- Fixed RED initial spawn not gated by `spawnOnStart` — RED forces now correctly respect the `spawnOnStart` config flag instead of always spawning at mission start
+- Fixed `redSpawnPoint()` only handling `"start"` and `"middle"` hub keys — now uses generic lookup supporting any key in `CONFIG.redSpawnHubs`
+- Fixed dangerous `p.y` fallback in waypoint coordinate building — removed fallback that could silently use altitude as a horizontal coordinate when `p.z` was nil
+
+**Realism Improvements:**
+- Added staggered spawn timing: groups within a wave spawn with small random delays (3-12s), simulating column movement from staging areas
+- Added scatter positioning: units spawn at random positions within the hub zone using uniform-area polar distribution instead of neat radial rings
+- Added variable wave composition: unit counts per wave vary randomly within +/-35% of the base count, so no two waves are identical
+- Added weighted random route selection: routes are chosen with weighted randomness, penalizing the most-recently-used route for less predictable AI movement
+
+**New Features:**
+- Added `OnAfterEmpty` FSM event handler: zones revert to neutral markup color when no ground units are present
+
 ## Credits
 
 This script is inspired by and builds upon concepts from:
 - **FOOTHOLD** framework (zone capture, markup coloring, credit system)
-- **MOOSE** framework (zone management, CTLD, scheduling)
+- **MOOSE** framework (zone management, CTLD, CSAR, scheduling)
 - Various DCS community mission scripts
 
 ## License
 
 This script is provided as-is for use in DCS World missions. Feel free to modify and adapt for your own missions.
-
 ---
-*Bullet's Ground Ops v09B*
+
+*README for Bullet's Ground Ops*
