@@ -96,6 +96,35 @@ local CONFIG = {
   enableWeightedRoutes  = true,        -- Weighted random route selection
   routeRepeatPenalty    = 0.3,         -- Weight multiplier for the most-recently-used route
 
+  -- =====================
+  -- APC DISMOUNT
+  -- =====================
+  -- Instead of spawning slow-moving infantry at the hub, infantry squads spawn
+  -- when APCs (M-113 for BLUE, BTR-80 for RED) arrive inside a capture zone.
+  -- The APC "dismounts" a squad that guards the zone alongside the vehicle.
+  enableApcDismount      = true,       -- Master toggle for APC dismount system
+  dismountCheckInterval  = 10,         -- How often (seconds) to scan for APCs in zones
+  dismountZoneRadius     = nil,        -- Override zone radius for dismount check (nil = use ME zone radius)
+  dismountSpreadRadius   = 30,         -- How far (meters) infantry scatter around the APC
+  -- BLUE dismount squad: 4x M4, 2x M249, 2x RPG (CJTF Blue / USA)
+  blueDismountSquad = {
+    { type = "Soldier M4",   count = 4 },
+    { type = "Soldier M249", count = 2 },
+    { type = "Soldier RPG",  count = 2 },
+  },
+  -- RED dismount squad: 4x AK-74 ver1, 2x AK-74 ver2, 2x RPG
+  redDismountSquad = {
+    { type = "Infantry AK",      count = 4 },
+    { type = "Infantry AK ver2", count = 2 },
+    { type = "Soldier RPG",      count = 2 },
+  },
+  -- APC types that trigger dismount (DCS type name -> side)
+  dismountApcTypes = {
+    ["M-113"]  = "blue",
+    ["BTR-80"] = "red",
+  },
+  dismountOnHit = true,         -- Also dismount when APC takes fire (not just zone arrival)
+
   -- UNIT QUOTAS (max alive at any time per side)
   blueQuota = {
     MBT  = 8,   -- M-1 Abrams
@@ -474,178 +503,36 @@ local function out(msg, dur)
   end
 end
 
---- Output a diagnostic message to dcs.log ONLY (no on-screen text).
--- Use for verbose/detail messages that would clutter the screen.
--- @param msg  string|any  message to log
-local function logOnly(msg)
-  local text = PREFIX .. tostring(msg)
-  if env and env.info then
-    env.info(text)
+--- Event handler for dismount-on-hit: when an APC takes damage, immediately
+-- spawn dismount troops at its position (regardless of whether it's in a zone).
+if CONFIG.enableApcDismount and CONFIG.dismountOnHit then
+  local hitHandler = {}
+  function hitHandler:onEvent(event)
+    if event.id ~= world.event.S_EVENT_HIT then return end
+    local target = event.target
+    if not target then return end
+    local ok, uid = pcall(function() return target:getID() end)
+    if not ok or not uid then return end
+    if apcDismountedSet[uid] then return end  -- already dismounted
+
+    local ok2, typeName = pcall(function() return target:getTypeName() end)
+    if not ok2 or not typeName then return end
+    local side = CONFIG.dismountApcTypes[typeName]
+    if not side then return end
+
+    local pos = target:getPoint()
+    if not pos then return end
+
+    apcDismountedSet[uid] = true
+    local zn = findZoneAtPosition(pos.x, pos.z)
+    spawnDismountSquad(side, pos.x, pos.z, zn)
+
+    if CONFIG.testMode then
+      out(string.format("[Dismount] %s hit! Immediate dismount at %s", typeName, zn or "field"), 5)
+    end
   end
-end
-
---- Safely retrieve a global variable without triggering __index metamethods.
--- @param name  string  global variable name
--- @return any|nil  the value, or nil if not set
-local function getGlobal(name)
-  return rawget(_G, name)
-end
-
---- Get the current mission time, with a safe fallback.
--- @return number  mission elapsed time in seconds
-local function now()
-  return (timer and timer.getTime and timer.getTime()) or 0
-end
-
-local SMOKE_COLOR_MAP = { green = 0, red = 1, white = 2, orange = 3, blue = 4 }
-
-local function resolveSmokeColor(value)
-  local t = type(value)
-  if t == "string" then
-    local k = string.lower(value)
-    return SMOKE_COLOR_MAP[k] or 4
-  elseif t == "number" then
-    if value >= 0 and value <= 4 then return value end
-    return 4
-  end
-  return 4
-end
-
-local function listToString(list)
-  local parts = {}
-  for i = 1, #list do parts[i] = tostring(list[i]) end
-  return table.concat(parts, ", ")
-end
-
---- Map coalition side number to human-readable name.
--- @param side  number  0=NEUTRAL, 1=RED, 2=BLUE
--- @return string
-local SIDE_NAMES = { [0] = "NEUTRAL", [1] = "RED", [2] = "BLUE" }
-local function sideName(side)
-  return SIDE_NAMES[side] or "UNKNOWN"
-end
-
---- Check if a Mission Editor trigger zone exists.
--- @param name  string  trigger zone name
--- @return boolean
-local function zoneExists(name)
-  if trigger and trigger.misc and trigger.misc.getZone then
-    local z = trigger.misc.getZone(name)
-    return z and z.point and true or false
-  end
-  return false
-end
-
-local function validateConfig()
-  local seen, invalid, uniq = {}, {}, {}
-  if type(CONFIG.zoneNames) ~= "table" or #CONFIG.zoneNames == 0 then
-    out("CONFIG.zoneNames must be a non-empty list", 10)
-    return false
-  end
-  for _, n in ipairs(CONFIG.zoneNames) do
-    if type(n) ~= "string" or n == "" then table.insert(invalid, tostring(n)) end
-    if seen[n] then table.insert(uniq, n) else seen[n] = true end
-  end
-  if #invalid > 0 then out("Invalid zone names: " .. listToString(invalid), 10) end
-  if #uniq > 0 then out("Duplicate zone names: " .. listToString(uniq), 10) end
-  local c = tostring(CONFIG.coalitionFilter or "blue"):lower()
-  if c ~= "blue" and c ~= "red" then
-    out("CONFIG.coalitionFilter must be 'blue' or 'red' (got '" .. tostring(CONFIG.coalitionFilter) .. "'), defaulting to 'blue'", 10)
-    CONFIG.coalitionFilter = "blue"
-  else
-    CONFIG.coalitionFilter = c
-  end
-  CONFIG._smokeColorResolved = resolveSmokeColor(CONFIG.smokeColor)
-  return #invalid == 0 and #uniq == 0
-end
-
-local function mooseVisible()
-  local hasZone      = getGlobal("ZONE") ~= nil
-  local hasScheduler = getGlobal("SCHEDULER") ~= nil
-  local hasSet       = getGlobal("SET_UNIT") ~= nil or getGlobal("SET_GROUP") ~= nil
-  return hasZone and hasScheduler and hasSet
-end
-
-local function getMissingZones(names)
-  local missing = {}
-  if not (trigger and trigger.misc and trigger.misc.getZone) then
-    for _, n in ipairs(names) do table.insert(missing, n) end
-    return missing
-  end
-  for _, n in ipairs(names) do
-    local z = trigger.misc.getZone(n)
-    if not (z and z.point) then table.insert(missing, n) end
-  end
-  return missing
-end
-
-local function allZonesPresent(names)
-  return #getMissingZones(names) == 0
-end
-
-local function nativeSmoke(name)
-  if not (trigger and trigger.misc and trigger.misc.getZone) then return end
-  local z = trigger.misc.getZone(name)
-  if z and z.point and trigger and trigger.action and trigger.action.smoke then
-    local color = CONFIG._smokeColorResolved or 4
-    pcall(function() trigger.action.smoke(z.point, color) end)
-  end
-end
-
-local function safeDrawZone(zo)
-  if CONFIG.drawZones and type(zo.DrawZone) == "function" then
-    pcall(function()
-      zo:DrawZone(
-        -1,
-        CONFIG.drawLineColor or {1, 0, 0},
-        CONFIG.drawLineAlpha or 0.5,
-        CONFIG.drawFillColor or {1, 0, 0},
-        CONFIG.drawFillAlpha or 0.2,
-        CONFIG.drawLineWidth or 2
-      )
-    end)
-  end
-end
-
---- Redraw a zone with a specific coalition color (called on capture).
--- Removes the old drawing first, then redraws with the new color.
--- @param zo  MOOSE ZONE object
--- @param lineColor  {r, g, b} table for the outline
--- @param fillColor  {r, g, b} table for the fill
-local function redrawZoneColor(zo, lineColor, fillColor)
-  if not CONFIG.drawZones then return end
-  if not zo or type(zo.DrawZone) ~= "function" then return end
-  -- Remove the previous drawing if the MOOSE method exists
-  if type(zo.UndrawZone) == "function" then
-    pcall(function() zo:UndrawZone() end)
-  end
-  pcall(function()
-    zo:DrawZone(
-      -1,
-      lineColor  or {1, 1, 1},
-      CONFIG.drawLineAlpha or 0.5,
-      fillColor  or {1, 1, 1},
-      CONFIG.drawFillAlpha or 0.2,
-      CONFIG.drawLineWidth or 2
-    )
-  end)
-end
-
-local function safeMooseSmoke(zo)
-  if CONFIG.mooseSmokeZones and type(zo.Smoke) == "function" then
-    pcall(function()
-      local BLUE = (getGlobal("SMOKECOLOR") and SMOKECOLOR.Blue) or resolveSmokeColor(CONFIG.smokeColor)
-      zo:Smoke(BLUE)
-    end)
-  end
-end
-
-local function msgAll(text, dur)
-  if getGlobal("MESSAGE") then
-    pcall(function() MESSAGE:New(text, dur or 10):ToAll() end)
-  else
-    out(text, dur)
-  end
+  world.addEventHandler(hitHandler)
+  out("APC dismount-on-hit handler active", 5)
 end
 
 -- =====================
@@ -1643,50 +1530,34 @@ end
 -- =====================
 -- BLUE SPAWN PACKAGES (quota-aware)
 -- =====================
+--- Spawn an APC-centric package: M-113s that will dismount infantry when they arrive
+-- in capture zones (replaces the old direct-infantry spawn).
+-- Infantry are NOT spawned here; they appear via the APC dismount monitor.
 local function spawnInfantryPackage(atPoint, routePoints)
-  local t = math.floor(now())
   local countryBlue = CONFIG.useUSAForBlue and country.id.USA or country.id.CJTF_BLUE
   local cx = atPoint.x
   local cy = atPoint.z or 0
 
-  -- Check APC quota for the escort Stryker
   local alive = countAliveByClass(coalition.side.BLUE, BLUE_TYPE_CLASS)
   local room = quotaRoom(CONFIG.blueQuota, alive)
 
   if CONFIG.testMode then
-    out(string.format("BLUE INF quota check: APC alive=%d room=%d", alive.APC, room.APC), 5)
+    out(string.format("BLUE INF/APC quota check: APC alive=%d room=%d", alive.APC, room.APC), 5)
   end
 
-  local off = spawnOffsets(cx, cy, 10, 8)
-
-  -- 6x M4, 1x M249, 1x RPG-7 (8 infantry -- not quota-limited)
-  local infUnits = {}
-  local idx = 1
-  for i = 1, 6 do
-    table.insert(infUnits, mkUnit(string.format("BL_INF_M4_%d_%d", t, i), "Soldier M4", off[idx].x, off[idx].y, off[idx].hdg))
-    idx = idx + 1
-  end
-  table.insert(infUnits, mkUnit(string.format("BL_INF_M249_%d", t), "Soldier M249", off[idx].x, off[idx].y, off[idx].hdg))
-  idx = idx + 1
-  table.insert(infUnits, mkUnit(string.format("BL_INF_RPG_%d", t), "Soldier RPG", off[idx].x, off[idx].y, off[idx].hdg))
-  idx = idx + 1
-
-  local gInf = mkGroup(string.format("BLUE_INF_%d", t), "vehicle", infUnits, routePoints)
-  addGroupSafe(countryBlue, gInf)
-
-  -- 1x Stryker APC escort (staggered: arrives shortly after infantry)
-  if room.APC >= 1 then
-    local delay = nextStaggerDelay()
+  -- Spawn M-113 APCs (quota-limited). These will dismount infantry when they reach a zone.
+  local cumDelay = 0
+  local apcCount = math.min(2, room.APC)  -- up to 2 M-113s per wave
+  for i = 1, apcCount do
+    local delay = cumDelay
     scheduleSpawn(function()
-      local vpt = off[idx] or { x = cx + 12, y = cy, hdg = 0 }
-      local vehUnits = {
-        mkUnit(string.format("BL_STRYKER_%d", t), "M1126 Stryker ICV", vpt.x, vpt.y, vpt.hdg)
-      }
-      local gVeh = mkGroup(string.format("BLUE_STRYKER_%d", t), "vehicle", vehUnits, routePoints)
-      addGroupSafe(countryBlue, gVeh)
+      spawnVehicleGroup("BLUE_M113_INF", "M-113", 1, cx, cy, 20, i, "APC", room, countryBlue, routePoints)
     end, delay)
-  else
-    logOnly("BLUE APC quota reached -- Stryker escort skipped")
+    cumDelay = cumDelay + nextStaggerDelay()
+  end
+
+  if apcCount <= 0 then
+    logOnly("BLUE APC quota reached -- infantry APC package skipped")
   end
 end
 
@@ -1784,6 +1655,119 @@ local function spawnRedWaveB(pt, routePoints, room)
   scheduleSpawn(function()
     spawnVehicleGroup("RED_SA9",  "Strela-1 9P31", 1, cx, cy, 22, 1, nil,   room, cid, routePoints)  -- AA not quota-limited
   end, cumDelay)
+end
+
+-- =====================
+-- APC DISMOUNT SYSTEM
+-- =====================
+-- Monitors APCs (M-113 for BLUE, BTR-80 for RED) that enter capture zones.
+-- When an APC is detected inside a zone, an infantry squad spawns at the APC's
+-- position to guard the zone.  Each APC only dismounts once (tracked by unit ID).
+
+--- Registry of APC unit IDs that have already dismounted.
+local apcDismountedSet = {}
+
+--- Spawn an infantry squad at a given world position.
+-- @param side       string  "blue" or "red"
+-- @param wx         number  world X of the APC
+-- @param wy         number  world Y (Z in DCS 3D) of the APC
+-- @param zoneName   string  zone name (for logging / group naming)
+local function spawnDismountSquad(side, wx, wy, zoneName)
+  local t = math.floor(now())
+  local squad, countryId, prefix
+  if side == "blue" then
+    squad     = CONFIG.blueDismountSquad
+    countryId = CONFIG.useUSAForBlue and country.id.USA or country.id.CJTF_BLUE
+    prefix    = "BL_DISMOUNT"
+  else
+    squad     = CONFIG.redDismountSquad
+    countryId = country.id.RUSSIA
+    prefix    = "RD_DISMOUNT"
+  end
+  if not squad or #squad == 0 then return end
+
+  local totalUnits = 0
+  for _, entry in ipairs(squad) do totalUnits = totalUnits + entry.count end
+
+  local spread = CONFIG.dismountSpreadRadius or 30
+  local off = scatterOffsets(wx, wy, totalUnits, spread)
+
+  local units = {}
+  local idx = 1
+  for _, entry in ipairs(squad) do
+    for i = 1, entry.count do
+      local p = off[idx] or { x = wx + idx * 2, y = wy, hdg = 0 }
+      table.insert(units, mkUnit(
+        string.format("%s_%s_%d_%d", prefix, entry.type:gsub("%s", ""), t, idx),
+        entry.type, p.x, p.y, p.hdg
+      ))
+      idx = idx + 1
+    end
+  end
+
+  -- Infantry squad has no route: they hold position at the zone
+  local gName = string.format("%s_%s_%d", prefix, (zoneName or "UNK"):gsub("%s", ""), t)
+  local grp = mkGroup(gName, "vehicle", units, {})
+  addGroupSafe(countryId, grp)
+
+  if CONFIG.testMode then
+    out(string.format("[Dismount] %s squad (%d troops) deployed at %s", side:upper(), totalUnits, zoneName or "?"), 5)
+  end
+  logOnly(string.format("APC dismount: %s squad (%d) at %s [%.0f, %.0f]", side, totalUnits, zoneName or "?", wx, wy))
+end
+
+--- Scan all APCs of tracked types and check if they are inside any capture zone.
+-- If so, spawn a dismount squad and mark the APC as dismounted.
+-- @param zoneNames  table   list of zone name strings to check
+local function checkApcDismounts(zoneNames)
+  if not CONFIG.enableApcDismount then return end
+  local apcTypes = CONFIG.dismountApcTypes
+  if not apcTypes then return end
+
+  -- Iterate both coalitions
+  for _, coalSide in ipairs({ coalition.side.BLUE, coalition.side.RED }) do
+    local ok, groups = pcall(function()
+      return coalition.getGroups(coalSide, Group.Category.GROUND)
+    end)
+    if ok and groups then
+      for _, grp in ipairs(groups) do
+        if grp and grp:isExist() then
+          local units = grp:getUnits()
+          if units then
+            for _, u in ipairs(units) do
+              if u and u:isExist() and u:getLife() > 1 then
+                local uid = u:getID()
+                if not apcDismountedSet[uid] then
+                  local typeName = u:getTypeName()
+                  local side = apcTypes[typeName]
+                  if side then
+                    -- Check if this APC is inside any capture zone
+                    local apcPos = u:getPoint()
+                    if apcPos then
+                      for _, zn in ipairs(zoneNames) do
+                        local zoneData = trigger.misc.getZone(zn)
+                        if zoneData and zoneData.point then
+                          local zr = CONFIG.dismountZoneRadius or zoneData.radius or 3000
+                          local dx = apcPos.x - zoneData.point.x
+                          local dz = apcPos.z - zoneData.point.z
+                          if (dx * dx + dz * dz) <= (zr * zr) then
+                            -- APC is inside this zone -> dismount
+                            apcDismountedSet[uid] = true
+                            spawnDismountSquad(side, apcPos.x, apcPos.z, zn)
+                            break  -- only dismount once per APC
+                          end
+                        end
+                      end
+                    end
+                  end
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+  end
 end
 
 -- =====================
@@ -2031,7 +2015,7 @@ local function startSpawnManager(mooseZones)
     if CONFIG.spawnAlternating then
       if toggleInfArmor then
         spawnInfantryPackage(pt, blueRoute)
-        kind = "Infantry"
+        kind = "APC (dismount)"
       else
         spawnArmorPackage(pt, blueRoute)
         kind = "Armor"
@@ -2040,7 +2024,7 @@ local function startSpawnManager(mooseZones)
     else
       spawnInfantryPackage(pt, blueRoute)
       spawnArmorPackage(pt, blueRoute)
-      kind = "Infantry+Armor"
+      kind = "APC+Armor"
     end
     lastBlueSpawnAt = curTime
     logOnly(string.format("BLUE %s wave -> %s (from %s)", kind or "?", target, tostring(zname or "?")))
@@ -2467,6 +2451,21 @@ local function startSpawnManager(mooseZones)
       end
     end, {}, 10, 10)
   end)
+
+  -- =====================
+  -- APC DISMOUNT MONITOR
+  -- =====================
+  -- Periodically scans for APCs (M-113 / BTR-80) that have entered capture zones
+  -- and spawns dismount infantry squads at their position.
+  if CONFIG.enableApcDismount then
+    local dismountInterval = CONFIG.dismountCheckInterval or 10
+    out("APC dismount monitor enabled (every " .. dismountInterval .. "s)", 5)
+    pcall(function()
+      SCHEDULER:New(nil, function()
+        checkApcDismounts(CONFIG.zoneNames)
+      end, {}, dismountInterval, dismountInterval)
+    end)
+  end
 
   -- =====================
   -- ENEMY C2 DESTRUCTION MONITOR
